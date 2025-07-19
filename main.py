@@ -59,24 +59,40 @@ with st.sidebar:
     st.header("🎤 Voice Input")
     st.caption("Or speak your question instead of typing it.")
 
-    def transcribe_audio_from_stream():
-        speech_config = speechsdk.SpeechConfig(subscription=AZURE_SPEECH_KEY, region=AZURE_SPEECH_REGION)
-        audio_config = speechsdk.audio.AudioConfig(use_default_microphone=True)
-        speech_recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
-        st.info("🎙️ Listening... Please speak your question clearly.")
-        result = speech_recognizer.recognize_once()
-        if result.reason == speechsdk.ResultReason.RecognizedSpeech:
-            st.success("✅ Transcription Complete")
-            return result.text
-        else:
-            st.error(f"Speech Recognition Error: {result.reason}")
-            return ""
+    uploaded_audio = st.audio_input("🎙️ Record Your Question")
+    
+    if uploaded_audio is not None:
+        try:
+            st.info("🧠 Transcribing audio...")
+            speech_config = speechsdk.SpeechConfig(subscription=AZURE_SPEECH_KEY, region=AZURE_SPEECH_REGION)
+    
+            # Read audio bytes from browser mic input
+            audio_data = uploaded_audio.read()
+    
+            # Create a stream to feed into Azure SDK
+            stream = speechsdk.audio.PushAudioInputStream()
+            stream.write(audio_data)
+            stream.close()
+    
+            audio_config = speechsdk.audio.AudioConfig(stream=stream)
+    
+            speech_recognizer = speechsdk.SpeechRecognizer(
+                speech_config=speech_config,
+                audio_config=audio_config
+            )
+    
+            result = speech_recognizer.recognize_once()
+    
+            if result.reason == speechsdk.ResultReason.RecognizedSpeech:
+                st.success("✅ Transcription Complete")
+                current = st.session_state.user_question.strip()
+                st.session_state.user_question = f"{current} {result.text}".strip()
+            else:
+                st.error(f"❌ Speech Recognition Failed: {result.reason}")
+    
+        except Exception as e:
+            st.error(f"❌ Error during speech recognition: {str(e)}")
 
-    if st.button("🎙️ Record Your Question"):
-        transcription = transcribe_audio_from_stream()
-        if transcription:
-            current = st.session_state.user_question.strip()
-            st.session_state.user_question = f"{current} {transcription}".strip()
 
 # --- Main Area: Question Input ---
 col1, col2 = st.columns([5, 1])
