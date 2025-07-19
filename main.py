@@ -21,7 +21,7 @@ AZURE_SPEECH_REGION = st.secrets["AZURE_SPEECH_REGION"]
 #st.markdown("✅ **Using st.secrets successfully!**")
 
 # --- Page Setup ---
-st.set_page_config(page_title="Expert Agent Panel", layout="centered")
+st.set_page_config(page_title="Expert Agent Panel", layout="wide")
 st.markdown("""
     <style>
     .main > div:first-child { padding-top: 0rem; }
@@ -100,22 +100,25 @@ with st.sidebar:
 
 
 # --- Main Area: Question Input ---
-col1, col2 = st.columns([5, 1])
-with col1:
-    st.markdown(
-        "<h2 style='font-size:1.0rem; font-weight:600;'>🎙️ Enter your question and hear from trusted product development voices:</h2>",
-        unsafe_allow_html=True
-    )
-with col2:
-    if st.button("🧹 Clear"):
-        st.session_state.user_question = ""
+with st.container():
+    col1, col2 = st.columns([6, 1])  # Adjust column proportions to give more space
 
+    with col1:
+        st.markdown(
+            "<h2 style='font-size:1.0rem; font-weight:600;'>🎙️ Enter your question and hear from trusted product development voices:</h2>",
+            unsafe_allow_html=True
+        )
+    with col2:
+        if st.button("🧹 Clear"):
+            st.session_state.user_question = ""
+            
 st.text_area(
     label="",
     key="user_question",
-    height=120,
+    height=150,
     placeholder="Type or speak your question here...",
     help="You can also use voice input from the sidebar",
+    label_visibility="collapsed"
 )
 
 # --- Submit Button ---
@@ -169,13 +172,15 @@ if st.session_state.expert_output:
                 formatted.append(line.strip())
         return "<br>".join(formatted)
 
-    st.subheader("📢 Expert Discussion")
-    st.markdown(format_transcript(st.session_state.expert_output), unsafe_allow_html=True)
+    # ✅ Step 4: Container to maximize layout width
+    with st.container():
+        st.subheader("📢 Expert Discussion")
+        st.markdown(format_transcript(st.session_state.expert_output), unsafe_allow_html=True)
 
-    buffer = BytesIO()
-    buffer.write(st.session_state.expert_output.encode("utf-8"))
-    buffer.seek(0)
-    st.download_button("💾 Download Transcript (.txt)", buffer, file_name="expert_transcript.txt", mime="text/plain")
+        buffer = BytesIO()
+        buffer.write(st.session_state.expert_output.encode("utf-8"))
+        buffer.seek(0)
+        st.download_button("💾 Download Transcript (.txt)", buffer, file_name="expert_transcript.txt", mime="text/plain")
 
 # --- History Panel ---
 if st.session_state.history:
