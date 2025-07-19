@@ -3,19 +3,19 @@ import streamlit as st
 import azure.cognitiveservices.speech as speechsdk
 from azure.cognitiveservices.speech.audio import AudioStreamFormat
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, WebRtcStreamerContext
-import av
 import threading
 import numpy as np
 import time
 from azure.cognitiveservices.speech.audio import PushAudioInputStream, AudioConfig
 import requests
-import re
 from io import BytesIO
 from datetime import datetime
 import sys
 
 st.sidebar.text(f"Running Python {sys.version}")
 
+# Optional: Enable debug output
+DEBUG = st.sidebar.checkbox("Show Debug Logs", value=False)
 
 # --- Configuration ---
 ENDPOINT_URL = "https://expertpanel-endpoint.eastus.inference.ml.azure.com/score"
@@ -24,16 +24,9 @@ AZURE_SPEECH_KEY = st.secrets["AZURE_SPEECH_KEY"]
 AZURE_SPEECH_REGION = st.secrets["AZURE_SPEECH_REGION"]
 
 # --- Initialize Session State ---
-if "user_question" not in st.session_state:
-    st.session_state.user_question = ""
-if "expert_output" not in st.session_state:
-    st.session_state.expert_output = ""
-if "history" not in st.session_state:
-    st.session_state.history = []
-if "transcribing" not in st.session_state:
-    st.session_state.transcribing = False
-if "transcript_buffer" not in st.session_state:
-    st.session_state.transcript_buffer = ""
+for key in ["user_question", "expert_output", "history", "transcribing", "transcript_buffer"]:
+    if key not in st.session_state:
+        st.session_state[key] = "" if "buffer" in key or "question" in key or "output" in key else [] if key == "history" else False
 
 # --- Setup Azure Transcriber ---
 def setup_transcriber(audio_config):
@@ -51,7 +44,8 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext):
     results = []
 
     def recognized_handler(evt):
-        print("Recognition event received:", evt.result.text)
+        if DEBUG:
+            print("Recognition event received:", evt.result.text)
         if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
             results.append(evt.result.text)
 
@@ -63,40 +57,49 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext):
     transcriber.canceled.connect(stop_handler)
 
     transcriber.start_continuous_recognition_async()
-    print("Started Azure recognition... waiting for results...")
+    if DEBUG:
+        print("Started Azure recognition...")
 
     while webrtc_ctx.state.playing:
         audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=1)
         if not audio_frames:
-            print("No frames received...")
+            if DEBUG:
+                print("No audio frames received...")
             continue
-    
-        print(f"Received {len(audio_frames)} frames")
-    
+
+        if DEBUG:
+            print(f"Received {len(audio_frames)} frames")
+
         for frame in audio_frames:
-            if frame.sample_rate != 16000:
-                print(f"⚠️ Skipping frame with sample rate {frame.sample_rate}")
-                continue
-        
             audio_data = frame.to_ndarray()
+            if DEBUG:
+                print(f"Frame sample rate: {frame.sample_rate}, dtype: {audio_data.dtype}, shape: {audio_data.shape}")
+
+            if frame.sample_rate != 16000:
+                if DEBUG:
+                    print(f"⚠️ Skipping frame with unsupported sample rate {frame.sample_rate}")
+                continue
+
             if audio_data.ndim > 1:
                 audio_data = np.mean(audio_data, axis=1).astype(np.int16)
-        
-            print(f"Sample rate: {frame.sample_rate}, dtype: {audio_data.dtype}, shape: {audio_data.shape}")
+
             push_stream.write(audio_data.tobytes())
 
-    
         time.sleep(0.1)
 
     transcriber.stop_continuous_recognition()
     push_stream.close()
 
-    print("Transcription finished:", results)  # ✅ Place it here
+    full_text = " ".join(results).strip()
+    st.session_state.transcript_buffer = full_text
 
-    full_text = " ".join(results)
-    st.session_state.transcript_buffer = full_text.strip()
-    if full_text.strip():
+    if DEBUG:
+        print("Transcription finished. Final transcript:", full_text)
+
+    if full_text:
         st.toast("📝 Voice transcription added to input box")
+    else:
+        st.toast("⚠️ No recognizable speech detected. Try again.", icon="⚠️")
 
 # --- UI Layout ---
 st.set_page_config(page_title="Expert Agent Panel", layout="wide")
@@ -129,11 +132,10 @@ def clear_user_question():
 
 col1, col2 = st.columns([6, 2])
 with col1:
-    # Inject any buffered transcript from background thread into the user_question field
     if st.session_state.transcript_buffer:
         st.session_state.user_question += " " + st.session_state.transcript_buffer
         st.session_state.transcript_buffer = ""
-        
+
     st.text_area(
         label="User Question",
         key="user_question",
@@ -143,8 +145,7 @@ with col1:
         label_visibility="collapsed"
     )
 with col2:
-    if st.button("🧹 Clear", on_click=clear_user_question):
-        pass
+    st.button("🧹 Clear", on_click=clear_user_question)
 
 # --- Submit Button ---
 if st.button("💻 Submit Question", disabled=not st.session_state.user_question.strip()):
@@ -180,7 +181,7 @@ if st.session_state.expert_output:
             if line.startswith("Host:"):
                 formatted.append("<span style='color:#745C00; font-weight:bold;'>Host:</span><br> " + line[5:].strip())
             elif line.startswith("Bill Brown:"):
-                formatted.append("<span style='color:#00575D; font-weight:bold;'>👨‍💼Bill Brown:</span><br> " + line[11:].strip())
+                formatted.append("<span style='color:#00575D; font-weight:bold;'>👨‍💼 Bill Brown:</span><br> " + line[11:].strip())
             elif line.startswith("Donald Reinertsen:"):
                 formatted.append("<span style='color:#00575D; font-weight:bold;'>👨‍💼 Donald Reinertsen:</span><br> " + line[18:].strip())
             else:
