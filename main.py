@@ -18,8 +18,8 @@ import soundfile as sf
 ENDPOINT_URL = "https://expertpanel-endpoint.eastus.inference.ml.azure.com/score"
 API_KEY = st.secrets["expertpanel_promptflow_apikey"]
 
-model_size = "small.en"  # Options: tiny.en, base.en, small.en, medium.en, large
-compute_type = "int8"    # Options: int8, float16, float32
+model_size = "small.en"
+compute_type = "int8"
 
 # --- Initialize Session State ---
 if "user_question" not in st.session_state:
@@ -30,7 +30,8 @@ if "history" not in st.session_state:
     st.session_state.history = []
 if "audio_text_buffer" not in st.session_state:
     st.session_state.audio_text_buffer = ""
-
+if "transcription_started" not in st.session_state:
+    st.session_state.transcription_started = False
 
 # --- Load Whisper Model ---
 @st.cache_resource(show_spinner=False)
@@ -61,9 +62,14 @@ audio_queue = queue.Queue()
 
 def audio_callback(frame):
     audio = frame.to_ndarray()
-    audio_mono = audio.mean(axis=1)  # convert to mono
+    # Handle stereo and mono formats
+    if len(audio.shape) == 2:
+        audio_mono = audio.mean(axis=1)
+    else:
+        audio_mono = audio
+    print(f"🔈 Audio chunk received: shape={audio_mono.shape}")
     audio_queue.put(audio_mono)
-    return frame  # still needed to display input level
+    return frame
 
 def transcription_worker():
     buffer = []
@@ -73,9 +79,10 @@ def transcription_worker():
         except queue.Empty:
             continue
         if audio_chunk is None:
+            print("📤 Manual flush triggered.")
             break
         buffer.extend(audio_chunk.tolist())
-        if len(buffer) > 16000 * 5:  # Transcribe every ~5 seconds
+        if len(buffer) > 16000 * 3:  # ~3 seconds
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_wav:
                 tmp_path = tmp_wav.name
                 sf.write(tmp_path, np.array(buffer), 16000)
@@ -87,8 +94,8 @@ def transcription_worker():
 
                 if transcript:
                     st.session_state.audio_text_buffer += " " + transcript
+                    print(f"✅ Transcription added: {transcript.strip()}")
 
-            # 🔁 Trigger UI update after processing
             st.rerun()
             buffer.clear()
 
@@ -105,14 +112,20 @@ with st.sidebar:
         audio_frame_callback=audio_callback,
     )
 
-    if webrtc_ctx.state.playing and not st.session_state.get("transcription_started", False):
-        threading.Thread(target=transcription_worker, daemon=True).start()
-        st.session_state.transcription_started = True
+    if webrtc_ctx.state.playing:
+        st.success("🎙️ Microphone is live and recording...")
+        if not st.session_state.transcription_started:
+            threading.Thread(target=transcription_worker, daemon=True).start()
+            st.session_state.transcription_started = True
+    else:
+        st.warning("🎤 Microphone not yet active. Click START and allow mic access.")
+
+    if st.button("📝 Force Transcribe Now"):
+        audio_queue.put(None)
 
     if st.session_state.audio_text_buffer:
         st.info("🧠 Live transcription:")
         st.markdown(f"**{st.session_state.audio_text_buffer.strip()}**")
-
 
 # --- Text Area ---
 def clear_user_question():
