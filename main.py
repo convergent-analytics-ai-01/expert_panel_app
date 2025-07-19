@@ -5,7 +5,6 @@ from streamlit_webrtc import webrtc_streamer, WebRtcMode, WebRtcStreamerContext
 import av
 import threading
 import numpy as np
-import pydub
 import time
 from azure.cognitiveservices.speech.audio import PushAudioInputStream, AudioConfig
 import requests
@@ -65,18 +64,17 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext):
         if not audio_frames:
             continue
 
-    for frame in audio_frames:
-        # Convert to mono channel (average if stereo)
-        audio_data = frame.to_ndarray()
-        if audio_data.ndim > 1:
-            audio_data = np.mean(audio_data, axis=1).astype(np.int16)  # downmix
-    
-        # Resample to 16000 Hz if needed
-        if frame.sample_rate != 16000:
-            # Optional: Use scipy.signal.resample_poly for real resampling
-            continue  # For now, skip if not 16000 Hz
-    
-        push_stream.write(audio_data.tobytes())
+        for frame in audio_frames:
+            # Convert to mono channel (average if stereo)
+            audio_data = frame.to_ndarray()
+            if audio_data.ndim > 1:
+                audio_data = np.mean(audio_data, axis=1).astype(np.int16)  # downmix
+
+            # Resample to 16000 Hz if needed (currently skipped)
+            if frame.sample_rate != 16000:
+                continue
+
+            push_stream.write(audio_data.tobytes())
         time.sleep(0.1)
 
     transcriber.stop_continuous_recognition()
@@ -85,6 +83,7 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext):
     full_text = " ".join(results)
     st.session_state.user_question += " " + full_text.strip()
     st.rerun()
+
 
 # --- UI Layout ---
 st.set_page_config(page_title="Expert Agent Panel", layout="wide")
