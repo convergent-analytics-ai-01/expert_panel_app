@@ -47,7 +47,9 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext):
     results = []
 
     def recognized_handler(evt):
+        print("Recognition event received")
         if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
+            print("Recognized:", evt.result.text)
             results.append(evt.result.text)
 
     def stop_handler(evt):
@@ -62,15 +64,17 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext):
     while webrtc_ctx.state.playing:
         audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=1)
         if not audio_frames:
+            print("No frames received...")
             continue
+    
+        print(f"Received {len(audio_frames)} frames")
     
         for frame in audio_frames:
             audio_data = frame.to_ndarray()
             if audio_data.ndim > 1:
                 audio_data = np.mean(audio_data, axis=1).astype(np.int16)
     
-            if frame.sample_rate != 16000:
-                continue
+            print(f"Sample rate: {frame.sample_rate}")
     
             push_stream.write(audio_data.tobytes())
     
@@ -78,6 +82,8 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext):
 
     transcriber.stop_continuous_recognition()
     push_stream.close()
+
+    print("Transcription finished:", results)  # ✅ Place it here
 
     full_text = " ".join(results)
     st.session_state.user_question += " " + full_text.strip()
