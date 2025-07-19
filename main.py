@@ -31,6 +31,8 @@ if "history" not in st.session_state:
     st.session_state.history = []
 if "transcribing" not in st.session_state:
     st.session_state.transcribing = False
+if "transcript_buffer" not in st.session_state:
+    st.session_state.transcript_buffer = ""
 
 # --- Setup Azure Transcriber ---
 def setup_transcriber(audio_config):
@@ -86,8 +88,7 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext):
     print("Transcription finished:", results)  # ✅ Place it here
 
     full_text = " ".join(results)
-    st.session_state.user_question += " " + full_text.strip()
-    st.rerun()
+    st.session_state.transcript_buffer = full_text.strip()
 
 
 # --- UI Layout ---
@@ -121,8 +122,13 @@ def clear_user_question():
 
 col1, col2 = st.columns([6, 2])
 with col1:
+    # Inject any buffered transcript from background thread into the user_question field
+    if st.session_state.transcript_buffer:
+        st.session_state.user_question += " " + st.session_state.transcript_buffer
+        st.session_state.transcript_buffer = ""
+        
     st.text_area(
-        label="",
+        label="User Question",
         key="user_question",
         height=130,
         placeholder="Type or speak your question here...",
