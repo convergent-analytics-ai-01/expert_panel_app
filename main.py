@@ -91,12 +91,7 @@ with st.sidebar:
         key="transcriber",
         mode=WebRtcMode.SENDONLY,
         in_audio=True,
-        client_settings=ClientSettings(
-            rtc_configuration={
-                "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
-            },
-            media_stream_constraints={"video": False, "audio": True},
-        ),
+        video_processor_factory=None,
         audio_receiver_size=1024,
         sendback_audio=False,
         audio_frame_callback=audio_callback,
@@ -107,6 +102,7 @@ with st.sidebar:
         if st.session_state.audio_text_buffer:
             st.info("🧠 Live transcription:")
             st.markdown(f"**{st.session_state.audio_text_buffer.strip()}**")
+
 
 # --- Text Area ---
 def clear_user_question():
