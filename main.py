@@ -11,6 +11,10 @@ import requests
 import re
 from io import BytesIO
 from datetime import datetime
+import sys
+
+st.sidebar.text(f"Running Python {sys.version}")
+
 
 # --- Configuration ---
 ENDPOINT_URL = "https://expertpanel-endpoint.eastus.inference.ml.azure.com/score"
