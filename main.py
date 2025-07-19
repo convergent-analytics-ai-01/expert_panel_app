@@ -14,6 +14,9 @@ API_KEY = st.secrets["expertpanel_promptflow_apikey"]
 AZURE_SPEECH_KEY = st.secrets["AZURE_SPEECH_KEY"]
 AZURE_SPEECH_REGION = st.secrets["AZURE_SPEECH_REGION"]
 
+def clear_user_question():
+    st.session_state["user_question"] = ""
+
 # --- Page Setup ---
 st.set_page_config(page_title="Expert Agent Panel", layout="wide")
 st.markdown("""
@@ -33,7 +36,7 @@ st.markdown(
 
 # --- Session State Initialization ---
 if "user_question" not in st.session_state:
-    st.session_state.user_question = ""
+    st.session_state["user_question] = ""
 if "expert_output" not in st.session_state:
     st.session_state.expert_output = ""
 if "history" not in st.session_state:
@@ -121,8 +124,8 @@ with st.container():
             label_visibility="collapsed"
         )
     with col2:
-        if st.button("🧹 Clear"):
-            st.session_state.user_question = ""
+        if st.button("🧹 Clear", on_click=clear_user_question):
+            pass  # The reset happens in the callback
 
 # --- Submit Button ---
 submit_disabled = not st.session_state.user_question.strip()
