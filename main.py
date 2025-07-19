@@ -3,16 +3,16 @@ import streamlit as st
 import requests
 import os
 from io import BytesIO
+import azure.cognitiveservices.speech as speechsdk
 from datetime import datetime
 import re
 import tempfile
-import numpy as np
-from faster_whisper import WhisperModel
-import ffmpeg
 
 # --- Configuration ---
 ENDPOINT_URL = "https://expertpanel-endpoint.eastus.inference.ml.azure.com/score"
 API_KEY = st.secrets["expertpanel_promptflow_apikey"]
+AZURE_SPEECH_KEY = st.secrets["AZURE_SPEECH_KEY"]
+AZURE_SPEECH_REGION = st.secrets["AZURE_SPEECH_REGION"]
 
 def clear_user_question():
     st.session_state["user_question"] = ""
@@ -44,21 +44,41 @@ if "history" not in st.session_state:
 if "audio_input_counter" not in st.session_state:
     st.session_state.audio_input_counter = 0
 
-# --- Helper: Whisper Transcription ---
-@st.cache_resource(show_spinner=False)
-def load_whisper_model():
-    return WhisperModel("small.en", compute_type="int8") # Originally int8 (40s to 14).  Try "float16" or "float32" if your hardware allows
+# --- Helper: Continuous Speech Recognition ---
+def transcribe_wav_file_continuous(filepath):
+    speech_config = speechsdk.SpeechConfig(
+        subscription=AZURE_SPEECH_KEY,
+        region=AZURE_SPEECH_REGION
+    )
+    audio_config = speechsdk.audio.AudioConfig(filename=filepath)
+    recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
 
-model = load_whisper_model()
+    full_text = []
+    done = False
 
-def transcribe_audio_fasterwhisper(filepath):
-    segments, _ = model.transcribe(filepath, beam_size=5)
-    return " ".join([seg.text.strip() for seg in segments])
+    def recognized_handler(evt):
+        if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
+            full_text.append(evt.result.text)
 
-# --- Sidebar: Audio Input with faster-whisper ---
+    def stop_handler(evt):
+        nonlocal done
+        done = True
+
+    recognizer.recognized.connect(recognized_handler)
+    recognizer.session_stopped.connect(stop_handler)
+    recognizer.canceled.connect(stop_handler)
+
+    recognizer.start_continuous_recognition()
+    while not done:
+        pass
+    recognizer.stop_continuous_recognition()
+
+    return " ".join(full_text)
+
+# --- Streamlit Sidebar Mic Section ---
 with st.sidebar:
     st.header("🎤 Voice Input")
-    st.caption("Speak your question. Whisper will transcribe it locally.")
+    st.caption("Or speak your question instead of typing it.")
 
     uploaded_audio = st.audio_input(
         label="🎙️ Record Your Question",
@@ -67,24 +87,25 @@ with st.sidebar:
 
     if uploaded_audio is not None:
         try:
-            st.info("🧠 Transcribing audio locally...")
+            st.info("🧠 Transcribing audio...")
+
             with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
                 tmp_file.write(uploaded_audio.read())
                 tmp_filename = tmp_file.name
 
-            transcription = transcribe_audio_fasterwhisper(tmp_filename)
+            result_text = transcribe_wav_file_continuous(tmp_filename)
 
-            if transcription.strip():
-                st.success("✅ Transcription Complete")
-                st.session_state.user_question = (
-                    f"{st.session_state.user_question.strip()} {transcription}".strip()
-                )
+            if result_text.strip():
+                st.success("✅ Full Transcription Complete")
+                current = st.session_state.user_question.strip()
+                st.session_state.user_question = f"{current} {result_text}".strip()
                 st.session_state.audio_input_counter += 1
                 st.rerun()
             else:
                 st.warning("🤔 No speech recognized.")
+
         except Exception as e:
-            st.error(f"❌ Error during local transcription: {str(e)}")
+            st.error(f"❌ Error: {str(e)}")
 
 # --- Main Area: Question Input ---
 with st.container():
