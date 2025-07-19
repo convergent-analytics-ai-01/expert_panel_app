@@ -65,21 +65,21 @@ with st.sidebar:
         try:
             st.info("🧠 Transcribing audio...")
     
+            # Save the uploaded file to a temporary WAV file
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
+                tmp_file.write(uploaded_audio.read())
+                tmp_filename = tmp_file.name
+    
+            # Create Azure Speech config
             speech_config = speechsdk.SpeechConfig(subscription=AZURE_SPEECH_KEY, region=AZURE_SPEECH_REGION)
     
-            # Read audio file data into memory
-            audio_bytes = uploaded_audio.read()
+            # Use the saved WAV file with Azure AudioConfig
+            audio_config = speechsdk.audio.AudioConfig(filename=tmp_filename)
     
-            # Use PullAudioInputStream to let Azure SDK read the file-like object
-            audio_format = speechsdk.audio.AudioStreamFormat(samples_per_second=16000, bits_per_sample=16, channels=1)
-            stream = speechsdk.audio.PushAudioInputStream(stream_format=audio_format)
-            stream.write(audio_bytes)
-            stream.close()
-    
-            audio_config = speechsdk.audio.AudioConfig(stream=stream)
-    
+            # Create the recognizer
             recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
     
+            # Run recognition
             result = recognizer.recognize_once()
     
             if result.reason == speechsdk.ResultReason.RecognizedSpeech:
