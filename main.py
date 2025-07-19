@@ -96,7 +96,11 @@ def transcription_worker():
                 if transcript:
                     st.session_state.audio_text_buffer += " " + transcript
                     print(f"✅ Transcription added: {transcript.strip()}")
-
+          
+            print(f"📥 Audio buffer length: {len(buffer)}")
+            print(f"✅ Transcription added: {transcript.strip()}")
+            print(f"🔁 Transcription rerun triggered")
+            
             st.rerun()
             buffer.clear()
 
@@ -105,13 +109,20 @@ with st.sidebar:
     st.header("🎤 Real-Time Voice Input")
     st.caption("Speak your question. Transcribed locally with Whisper.")
 
+    rtc_config = {
+        "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+    }
+    
     webrtc_ctx = webrtc_streamer(
         key="transcriber",
         mode=WebRtcMode.SENDONLY,
         audio_receiver_size=256,
+        rtc_configuration=rtc_config,
         media_stream_constraints={"audio": True, "video": False},
         audio_frame_callback=audio_callback,
     )
+    
+    print(f"🎙️ WebRTC state: {webrtc_ctx.state}")
 
     if webrtc_ctx.state.playing:
         st.success("🎙️ Microphone is live and recording...")
@@ -167,6 +178,9 @@ if st.button("💻 Submit Question", disabled=submit_disabled):
                 "Authorization": f"Bearer {API_KEY}"
             }
             payload = {"user_question": st.session_state.user_question}
+
+            print(f"📦 Payload: {payload}")
+            
             response = requests.post(ENDPOINT_URL, headers=headers, json=payload)
             response.raise_for_status()
             result = response.json()
