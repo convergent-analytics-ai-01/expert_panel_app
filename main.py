@@ -30,10 +30,7 @@ if "history" not in st.session_state:
     st.session_state.history = []
 if "audio_text_buffer" not in st.session_state:
     st.session_state.audio_text_buffer = ""
-if "transcription_started" not in st.session_state:
-    if webrtc_ctx.state.playing:
-        threading.Thread(target=transcription_worker, daemon=True).start()
-        st.session_state.transcription_started = True
+
 
 # --- Load Whisper Model ---
 @st.cache_resource(show_spinner=False)
@@ -78,14 +75,18 @@ def transcription_worker():
         if len(buffer) > 16000 * 5:  # Transcribe every ~5 seconds
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_wav:
                 tmp_path = tmp_wav.name
-                import soundfile as sf
                 sf.write(tmp_path, np.array(buffer), 16000)
-            segments, _ = model.transcribe(tmp_path)
-            transcript = " ".join([seg.text.strip() for seg in segments])
-            os.remove(tmp_path)
-            if transcript:
-                st.session_state.audio_text_buffer += " " + transcript
-                st.rerun()
+
+            with st.spinner("🧠 Transcribing your audio..."):
+                segments, _ = model.transcribe(tmp_path)
+                transcript = " ".join([seg.text.strip() for seg in segments])
+                os.remove(tmp_path)
+
+                if transcript:
+                    st.session_state.audio_text_buffer += " " + transcript
+
+            # 🔁 Trigger UI update after processing
+            st.rerun()
             buffer.clear()
 
 # --- WebRTC Streamer ---
