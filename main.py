@@ -27,15 +27,6 @@ else:
 
 st.write("🔒 Secrets loaded: ", list(st.secrets.keys()))
 
-
-# --- Session State ---
-if "expert_output" not in st.session_state:
-    st.session_state.expert_output = ""
-if "user_question" not in st.session_state:
-    st.session_state.user_question = ""
-if "history" not in st.session_state:
-    st.session_state.history = []
-
 # --- Page Setup ---
 st.set_page_config(page_title="Expert Agent Panel", layout="centered")
 st.markdown("""
@@ -91,9 +82,10 @@ with st.sidebar:
                 st.success("✅ Transcription Complete")
                 current = st.session_state.user_question.strip()
                 st.session_state.user_question = f"{current} {result.text}".strip()
-    
-                # Force reset of st.audio_input() for next recording
+            
+                # Reset the mic widget for next recording
                 st.session_state.audio_input_counter += 1
+                st.experimental_rerun()  # 🔁 Force re-render so mic widget resets
     
             else:
                 st.error(f"❌ Speech Recognition Failed: {result.reason}")
