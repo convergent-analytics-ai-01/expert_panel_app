@@ -101,7 +101,7 @@ with st.sidebar:
 
 # --- Main Area: Question Input ---
 with st.container():
-    col1, col2 = st.columns([6, 1])  # Adjust column proportions to give more space to the left
+    col1, col2 = st.columns([6, 2])  # Adjust column proportions to give more space to the left
 
     with col1:
         st.markdown(
