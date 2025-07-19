@@ -101,25 +101,28 @@ with st.sidebar:
 
 # --- Main Area: Question Input ---
 with st.container():
-    col1, col2 = st.columns([6, 1])  # Adjust column proportions to give more space
+    col1, col2 = st.columns([6, 1])  # Adjust column proportions to give more space to the left
 
     with col1:
         st.markdown(
             "<h2 style='font-size:1.0rem; font-weight:600;'>🎙️ Enter your question and hear from trusted product development voices:</h2>",
             unsafe_allow_html=True
         )
+        st.text_area(
+            label="",
+            key="user_question",
+            height=130,
+            placeholder="Type or speak your question here...",
+            help="You can also use voice input from the sidebar",
+            label_visibility="collapsed"
+        )
+
     with col2:
         if st.button("🧹 Clear"):
             st.session_state.user_question = ""
 
-st.text_area(
-    label="",
-    key="user_question",
-    height=130,
-    placeholder="Type or speak your question here...",
-    help="You can also use voice input from the sidebar",
-    label_visibility="collapsed"
-)
+
+
 
         
 
