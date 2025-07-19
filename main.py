@@ -63,18 +63,17 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext):
         audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=1)
         if not audio_frames:
             continue
-
+    
         for frame in audio_frames:
-            # Convert to mono channel (average if stereo)
             audio_data = frame.to_ndarray()
             if audio_data.ndim > 1:
-                audio_data = np.mean(audio_data, axis=1).astype(np.int16)  # downmix
-
-            # Resample to 16000 Hz if needed (currently skipped)
+                audio_data = np.mean(audio_data, axis=1).astype(np.int16)
+    
             if frame.sample_rate != 16000:
                 continue
-
+    
             push_stream.write(audio_data.tobytes())
+    
         time.sleep(0.1)
 
     transcriber.stop_continuous_recognition()
