@@ -17,6 +17,16 @@ API_KEY = st.secrets["expertpanel_promptflow_apikey"]
 AZURE_SPEECH_KEY =st.secrets["AZURE_SPEECH_KEY"]
 AZURE_SPEECH_REGION = st.secrets["AZURE_SPEECH_REGION"]
 
+st.markdown("✅ **Using st.secrets successfully!**")
+
+if "AZURE_SPEECH_KEY" in st.secrets:
+    st.success("✅ Secret AZURE_SPEECH_KEY is available.")
+else:
+    st.error("❌ AZURE_SPEECH_KEY is missing.")
+
+st.write("🔒 Secrets loaded: ", list(st.secrets.keys()))
+
+
 # --- Session State ---
 if "expert_output" not in st.session_state:
     st.session_state.expert_output = ""
