@@ -43,7 +43,7 @@ def setup_transcriber(audio_config):
 
 # --- Transcription Worker ---
 def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext):
-        format = AudioStreamFormat(samples_per_second=16000, bits_per_sample=16, channels=1)
+    format = AudioStreamFormat(samples_per_second=16000, bits_per_sample=16, channels=1)
     push_stream = PushAudioInputStream(stream_format=format)
     audio_config = AudioConfig(stream=push_stream)
     transcriber = setup_transcriber(audio_config)
@@ -74,17 +74,17 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext):
         print(f"Received {len(audio_frames)} frames")
     
         for frame in audio_frames:
+            if frame.sample_rate != 16000:
+                print(f"⚠️ Skipping frame with sample rate {frame.sample_rate}")
+                continue
+        
             audio_data = frame.to_ndarray()
             if audio_data.ndim > 1:
                 audio_data = np.mean(audio_data, axis=1).astype(np.int16)
         
             print(f"Sample rate: {frame.sample_rate}, dtype: {audio_data.dtype}, shape: {audio_data.shape}")
-            
             push_stream.write(audio_data.tobytes())
-            
-            if frame.sample_rate != 16000:
-                print(f"⚠️ Skipping frame with sample rate {frame.sample_rate}")
-                continue
+
     
         time.sleep(0.1)
 
@@ -96,7 +96,7 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext):
     full_text = " ".join(results)
     st.session_state.transcript_buffer = full_text.strip()
     if full_text.strip():
-    st.toast("📝 Voice transcription added to input box")
+        st.toast("📝 Voice transcription added to input box")
 
 # --- UI Layout ---
 st.set_page_config(page_title="Expert Agent Panel", layout="wide")
