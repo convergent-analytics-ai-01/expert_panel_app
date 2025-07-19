@@ -1,21 +1,40 @@
 # --- Imports ---
 import streamlit as st
-import requests
-import os
-from io import BytesIO
-from datetime import datetime
-import re
-import tempfile
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, ClientSettings
 import numpy as np
 from faster_whisper import WhisperModel
-import ffmpeg
+import av
+import queue
+import threading
+import tempfile
+import os
+import requests
+import re
+from datetime import datetime
+from io import BytesIO
 
 # --- Configuration ---
 ENDPOINT_URL = "https://expertpanel-endpoint.eastus.inference.ml.azure.com/score"
 API_KEY = st.secrets["expertpanel_promptflow_apikey"]
+model_size = "small.en"  # Options: tiny.en, base.en, small.en, medium.en, large
+compute_type = "int8"    # Options: int8, float16, float32
 
-def clear_user_question():
-    st.session_state["user_question"] = ""
+# --- Initialize Session State ---
+if "user_question" not in st.session_state:
+    st.session_state.user_question = ""
+if "expert_output" not in st.session_state:
+    st.session_state.expert_output = ""
+if "history" not in st.session_state:
+    st.session_state.history = []
+if "audio_text_buffer" not in st.session_state:
+    st.session_state.audio_text_buffer = ""
+
+# --- Load Whisper Model ---
+@st.cache_resource(show_spinner=False)
+def load_whisper_model():
+    return WhisperModel(model_size, compute_type=compute_type)
+
+model = load_whisper_model()
 
 # --- Page Setup ---
 st.set_page_config(page_title="Expert Agent Panel", layout="wide")
@@ -34,59 +53,66 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# --- Session State Initialization ---
-if "user_question" not in st.session_state:
-    st.session_state["user_question"] = ""
-if "expert_output" not in st.session_state:
-    st.session_state.expert_output = ""
-if "history" not in st.session_state:
-    st.session_state.history = []
-if "audio_input_counter" not in st.session_state:
-    st.session_state.audio_input_counter = 0
+# --- Transcription Worker ---
+audio_queue = queue.Queue()
 
-# --- Helper: Whisper Transcription ---
-@st.cache_resource(show_spinner=False)
-def load_whisper_model():
-    return WhisperModel("small.en", compute_type="int8") # Originally int8 (40s to 14).  Try "float16" or "float32" if your hardware allows
+def audio_callback(frame: av.AudioFrame) -> av.AudioFrame:
+    audio = frame.to_ndarray()
+    audio = audio.flatten().astype(np.float32) / 32768.0
+    audio_queue.put(audio)
+    return frame
 
-model = load_whisper_model()
+def transcription_worker():
+    buffer = []
+    while True:
+        audio_chunk = audio_queue.get()
+        if audio_chunk is None:
+            break
+        buffer.extend(audio_chunk.tolist())
+        if len(buffer) > 16000 * 5:  # Transcribe every ~5 seconds
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_wav:
+                tmp_path = tmp_wav.name
+                import soundfile as sf
+                sf.write(tmp_path, np.array(buffer), 16000)
+            segments, _ = model.transcribe(tmp_path)
+            transcript = " ".join([seg.text.strip() for seg in segments])
+            os.remove(tmp_path)
+            if transcript:
+                st.session_state.audio_text_buffer += " " + transcript
+                st.rerun()
+            buffer.clear()
 
-def transcribe_audio_fasterwhisper(filepath):
-    segments, _ = model.transcribe(filepath, beam_size=5)
-    return " ".join([seg.text.strip() for seg in segments])
-
-# --- Sidebar: Audio Input with faster-whisper ---
+# --- WebRTC Streamer ---
 with st.sidebar:
-    st.header("🎤 Voice Input")
-    st.caption("Speak your question. Whisper will transcribe it locally.")
+    st.header("🎤 Real-Time Voice Input")
+    st.caption("Speak your question. Transcribed locally with Whisper.")
 
-    uploaded_audio = st.audio_input(
-        label="🎙️ Record Your Question",
-        key=f"audio_input_{st.session_state.audio_input_counter}"
+    webrtc_ctx = webrtc_streamer(
+        key="transcriber",
+        mode=WebRtcMode.SENDONLY,
+        in_audio=True,
+        client_settings=ClientSettings(
+            rtc_configuration={
+                "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+            },
+            media_stream_constraints={"video": False, "audio": True},
+        ),
+        audio_receiver_size=1024,
+        sendback_audio=False,
+        audio_frame_callback=audio_callback,
     )
 
-    if uploaded_audio is not None:
-        try:
-            st.info("🧠 Transcribing audio locally...")
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
-                tmp_file.write(uploaded_audio.read())
-                tmp_filename = tmp_file.name
+    if webrtc_ctx.state.playing:
+        threading.Thread(target=transcription_worker, daemon=True).start()
+        if st.session_state.audio_text_buffer:
+            st.info("🧠 Live transcription:")
+            st.markdown(f"**{st.session_state.audio_text_buffer.strip()}**")
 
-            transcription = transcribe_audio_fasterwhisper(tmp_filename)
+# --- Text Area ---
+def clear_user_question():
+    st.session_state.user_question = ""
+    st.session_state.audio_text_buffer = ""
 
-            if transcription.strip():
-                st.success("✅ Transcription Complete")
-                st.session_state.user_question = (
-                    f"{st.session_state.user_question.strip()} {transcription}".strip()
-                )
-                st.session_state.audio_input_counter += 1
-                st.rerun()
-            else:
-                st.warning("🤔 No speech recognized.")
-        except Exception as e:
-            st.error(f"❌ Error during local transcription: {str(e)}")
-
-# --- Main Area: Question Input ---
 with st.container():
     col1, col2 = st.columns([6, 2])
     with col1:
@@ -104,7 +130,11 @@ with st.container():
         )
     with col2:
         if st.button("🧹 Clear", on_click=clear_user_question):
-            pass  # The reset happens in the callback
+            pass
+
+# --- Add Live Transcript to User Question ---
+if st.session_state.audio_text_buffer and not st.session_state.user_question:
+    st.session_state.user_question = st.session_state.audio_text_buffer.strip()
 
 # --- Submit Button ---
 submit_disabled = not st.session_state.user_question.strip()
@@ -131,7 +161,6 @@ if st.button("💻 Submit Question", disabled=submit_disabled):
             st.success("✅ Response received.")
         except Exception as e:
             st.error(f"❌ Failed to get expert response: {str(e)}")
-            st.stop()
 
 # --- Display Expert Response ---
 if st.session_state.expert_output:
@@ -150,13 +179,13 @@ if st.session_state.expert_output:
                 formatted.append(line.strip())
         return "<br>".join(formatted)
 
-    with st.container():
-        st.subheader("📢 Expert Discussion")
-        st.markdown(format_transcript(st.session_state.expert_output), unsafe_allow_html=True)
-        buffer = BytesIO()
-        buffer.write(st.session_state.expert_output.encode("utf-8"))
-        buffer.seek(0)
-        st.download_button("💾 Download Transcript (.txt)", buffer, file_name="expert_transcript.txt", mime="text/plain")
+    st.subheader("📢 Expert Discussion")
+    st.markdown(format_transcript(st.session_state.expert_output), unsafe_allow_html=True)
+
+    buffer = BytesIO()
+    buffer.write(st.session_state.expert_output.encode("utf-8"))
+    buffer.seek(0)
+    st.download_button("💾 Download Transcript (.txt)", buffer, file_name="expert_transcript.txt", mime="text/plain")
 
 # --- History Panel ---
 if st.session_state.history:
@@ -165,45 +194,3 @@ if st.session_state.history:
             st.button(f"⏳ {item['question']}", key=f"hist_{item['time']}", help="Display only, click has no action")
         if st.button("❌ Clear History"):
             st.session_state.history.clear()
-
-# --- Helper to clean transcript for audio ---
-def prepare_text_for_tts(text):
-    text = re.sub(r"\\*\\*([^*]+)\\*\\*", r"\\1", text)
-    lines = text.split("\\n")
-    spoken = []
-    for line in lines:
-        line = line.strip()
-        if re.match(r"^(Host:?|🧑‍💻 Host:)", line):
-            content = re.sub(r"^(Host:?|🧑‍💻 Host:)", "", line).strip()
-            spoken.append("The host says: " + content)
-        elif re.match(r"^(Bill Brown:?|👨‍💼Bill Brown:)", line):
-            content = re.sub(r"^(Bill Brown:?|👨‍💼Bill Brown:)", "", line).strip()
-            spoken.append("Bill Brown's response is: " + content)
-        elif re.match(r"^(Donald Reinertsen:?|👨‍💼 Donald Reinertsen:)", line):
-            content = re.sub(r"^(Donald Reinertsen:?|👨‍💼 Donald Reinertsen:)", "", line).strip()
-            spoken.append("Donald Reinertsen responds: " + content)
-        else:
-            spoken.append(line)
-    return " ".join(spoken)
-
-# --- Sidebar: TTS Feature ---
-with st.sidebar:
-    st.markdown("---")
-    st.header("🔊 Audio Readout")
-    voice = st.selectbox("Choose Voice:", ["en-US-JennyNeural", "en-US-GuyNeural"])
-    if st.session_state.expert_output:
-        if st.button("▶️ Play Response Audio"):
-            try:
-                speech_config = speechsdk.SpeechConfig(subscription=AZURE_SPEECH_KEY, region=AZURE_SPEECH_REGION)
-                speech_config.speech_synthesis_voice_name = voice
-                synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config, audio_config=None)
-                text_for_audio = prepare_text_for_tts(st.session_state.expert_output)
-                result = synthesizer.speak_text_async(text_for_audio).get()
-                if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
-                    audio_buffer = BytesIO(result.audio_data)
-                    st.audio(audio_buffer, format="audio/wav")
-                    st.download_button("💾 Download Audio (.wav)", data=audio_buffer, file_name="expert_audio.wav", mime="audio/wav")
-                else:
-                    st.error(f"TTS failed: {result.reason}")
-            except Exception as e:
-                st.error(f"Azure TTS Error: {str(e)}")
