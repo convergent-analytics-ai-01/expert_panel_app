@@ -10,9 +10,12 @@ import re
 
 # --- Configuration ---
 ENDPOINT_URL = "https://expertpanel-endpoint.eastus.inference.ml.azure.com/score"
-API_KEY = os.getenv("expertpanel_promptflow_apikey")
-AZURE_SPEECH_KEY = os.getenv("AZURE_SPEECH_KEY")
-AZURE_SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION")
+#API_KEY = os.getenv("expertpanel_promptflow_apikey")
+#AZURE_SPEECH_KEY = os.getenv("AZURE_SPEECH_KEY")
+#AZURE_SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION")
+API_KEY = st.secrets["expertpanel_promptflow_apikey"]
+AZURE_SPEECH_KEY =st.secrets["AZURE_SPEECH_KEY"]
+AZURE_SPEECH_REGION = st.secrets["AZURE_SPEECH_REGION"]
 
 # --- Session State ---
 if "expert_output" not in st.session_state:
