@@ -62,6 +62,7 @@ audio_queue = queue.Queue()
 
 def audio_callback(frame):
     audio = frame.to_ndarray()
+    print(f"🔈 Audio received: {audio.shape}")
     # Handle stereo and mono formats
     if len(audio.shape) == 2:
         audio_mono = audio.mean(axis=1)
