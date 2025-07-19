@@ -30,7 +30,7 @@ narwhals==1.47.0
 numpy==2.3.1
 packaging==25.0
 pandas==2.3.1
-pillow==11.3.0
+pillow>=7.1.0,<11
 protobuf>=3.20,<5
 pyarrow==20.0.0
 pycparser==2.22
