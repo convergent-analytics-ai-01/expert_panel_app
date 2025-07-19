@@ -60,38 +60,47 @@ with st.sidebar:
     st.header("🎤 Voice Input")
     st.caption("Or speak your question instead of typing it.")
 
-    uploaded_audio = st.audio_input("🎙️ Record Your Question")
+    # At the top of your script (if not already present)
+    if "audio_input_counter" not in st.session_state:
+        st.session_state.audio_input_counter = 0
+    
+    # --- Streamlit Sidebar Mic Section ---
+    uploaded_audio = st.audio_input(
+        label="🎙️ Record Your Question",
+        key=f"audio_input_{st.session_state.audio_input_counter}"
+    )
     
     if uploaded_audio is not None:
         try:
             st.info("🧠 Transcribing audio...")
     
-            # Save the uploaded file to a temporary WAV file
+            # Save uploaded audio to a temporary WAV file
             with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
                 tmp_file.write(uploaded_audio.read())
                 tmp_filename = tmp_file.name
     
-            # Create Azure Speech config
+            # Azure Speech SDK configuration
             speech_config = speechsdk.SpeechConfig(subscription=AZURE_SPEECH_KEY, region=AZURE_SPEECH_REGION)
-    
-            # Use the saved WAV file with Azure AudioConfig
             audio_config = speechsdk.audio.AudioConfig(filename=tmp_filename)
-    
-            # Create the recognizer
             recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
     
-            # Run recognition
+            # Perform speech recognition
             result = recognizer.recognize_once()
     
             if result.reason == speechsdk.ResultReason.RecognizedSpeech:
                 st.success("✅ Transcription Complete")
                 current = st.session_state.user_question.strip()
                 st.session_state.user_question = f"{current} {result.text}".strip()
+    
+                # Force reset of st.audio_input() for next recording
+                st.session_state.audio_input_counter += 1
+    
             else:
                 st.error(f"❌ Speech Recognition Failed: {result.reason}")
     
         except Exception as e:
             st.error(f"❌ Error: {str(e)}")
+
 
 
 # --- Main Area: Question Input ---
