@@ -7,6 +7,7 @@ from io import BytesIO
 import azure.cognitiveservices.speech as speechsdk
 from datetime import datetime
 import re
+import tempfile
 
 # --- Configuration ---
 ENDPOINT_URL = "https://expertpanel-endpoint.eastus.inference.ml.azure.com/score"
