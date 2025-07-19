@@ -112,21 +112,15 @@ with st.container():
         if st.button("🧹 Clear"):
             st.session_state.user_question = ""
 
-with st.container():   
-    col1, col2 = st.columns([6, 1])  # Adjust column proportions to give more space
+st.text_area(
+    label="",
+    key="user_question",
+    height=130,
+    placeholder="Type or speak your question here...",
+    help="You can also use voice input from the sidebar",
+    label_visibility="collapsed"
+)
 
-    with col1:
-        st.text_area(
-            label="",
-            key="user_question",
-            height=130,
-            placeholder="Type or speak your question here...",
-            help="You can also use voice input from the sidebar",
-            label_visibility="collapsed"
-        )
-    with col2:
-        if st.button("🧹 Clear"):
-            st.session_state.user_question = ""
         
 
 # --- Submit Button ---
