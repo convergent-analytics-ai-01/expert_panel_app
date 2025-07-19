@@ -50,8 +50,8 @@ rpds-py==0.26.0
 six==1.17.0
 smmap==5.0.2
 soundfile==0.12.1
-streamlit==1.47.0
-streamlit-webrtc==0.45.0
+streamlit==1.30.0
+streamlit-webrtc==0.45.2
 tenacity==9.1.2
 toml==0.10.2
 tornado==6.5.1
