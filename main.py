@@ -5,6 +5,7 @@ from azure.cognitiveservices.speech.audio import AudioStreamFormat
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, WebRtcStreamerContext
 import threading
 import numpy as np
+from scipy.signal import resample
 import time
 from azure.cognitiveservices.speech.audio import PushAudioInputStream, AudioConfig
 import requests
@@ -75,10 +76,13 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext):
             if DEBUG:
                 print(f"Frame sample rate: {frame.sample_rate}, dtype: {audio_data.dtype}, shape: {audio_data.shape}")
 
+            # Inside the loop, replace the "skip" logic:
             if frame.sample_rate != 16000:
                 if DEBUG:
-                    print(f"⚠️ Skipping frame with unsupported sample rate {frame.sample_rate}")
-                continue
+                    print(f"🔄 Resampling from {frame.sample_rate} Hz to 16000 Hz")
+                # Calculate new length to match 16000 Hz
+                new_length = int(len(audio_data) * 16000 / frame.sample_rate)
+                audio_data = resample(audio_data, new_length).astype(np.int16)
 
             if audio_data.ndim > 1:
                 audio_data = np.mean(audio_data, axis=1).astype(np.int16)
