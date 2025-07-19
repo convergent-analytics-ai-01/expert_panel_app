@@ -68,7 +68,10 @@ def audio_callback(frame):
 def transcription_worker():
     buffer = []
     while True:
-        audio_chunk = audio_queue.get()
+        try:
+            audio_chunk = audio_queue.get(timeout=1.0)
+        except queue.Empty:
+            continue
         if audio_chunk is None:
             break
         buffer.extend(audio_chunk.tolist())
