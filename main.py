@@ -64,24 +64,23 @@ with st.sidebar:
     if uploaded_audio is not None:
         try:
             st.info("🧠 Transcribing audio...")
+    
             speech_config = speechsdk.SpeechConfig(subscription=AZURE_SPEECH_KEY, region=AZURE_SPEECH_REGION)
     
-            # Read audio bytes from browser mic input
-            audio_data = uploaded_audio.read()
+            # Read audio file data into memory
+            audio_bytes = uploaded_audio.read()
     
-            # Create a stream to feed into Azure SDK
-            stream = speechsdk.audio.PushAudioInputStream()
-            stream.write(audio_data)
+            # Use PullAudioInputStream to let Azure SDK read the file-like object
+            audio_format = speechsdk.audio.AudioStreamFormat(samples_per_second=16000, bits_per_sample=16, channels=1)
+            stream = speechsdk.audio.PushAudioInputStream(stream_format=audio_format)
+            stream.write(audio_bytes)
             stream.close()
     
             audio_config = speechsdk.audio.AudioConfig(stream=stream)
     
-            speech_recognizer = speechsdk.SpeechRecognizer(
-                speech_config=speech_config,
-                audio_config=audio_config
-            )
+            recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
     
-            result = speech_recognizer.recognize_once()
+            result = recognizer.recognize_once()
     
             if result.reason == speechsdk.ResultReason.RecognizedSpeech:
                 st.success("✅ Transcription Complete")
@@ -91,7 +90,7 @@ with st.sidebar:
                 st.error(f"❌ Speech Recognition Failed: {result.reason}")
     
         except Exception as e:
-            st.error(f"❌ Error during speech recognition: {str(e)}")
+            st.error(f"❌ Error: {str(e)}")
 
 
 # --- Main Area: Question Input ---
