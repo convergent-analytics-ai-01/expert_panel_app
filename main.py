@@ -1,6 +1,6 @@
 # --- Imports ---
 import streamlit as st
-from streamlit_webrtc import webrtc_streamer, WebRtcMode, ClientSettings
+from streamlit_webrtc import webrtc_streamer, WebRtcMode
 import numpy as np
 from faster_whisper import WhisperModel
 import av
@@ -12,10 +12,12 @@ import requests
 import re
 from datetime import datetime
 from io import BytesIO
+import soundfile as sf
 
 # --- Configuration ---
 ENDPOINT_URL = "https://expertpanel-endpoint.eastus.inference.ml.azure.com/score"
 API_KEY = st.secrets["expertpanel_promptflow_apikey"]
+
 model_size = "small.en"  # Options: tiny.en, base.en, small.en, medium.en, large
 compute_type = "int8"    # Options: int8, float16, float32
 
@@ -28,6 +30,10 @@ if "history" not in st.session_state:
     st.session_state.history = []
 if "audio_text_buffer" not in st.session_state:
     st.session_state.audio_text_buffer = ""
+if "transcription_started" not in st.session_state:
+    if webrtc_ctx.state.playing:
+        threading.Thread(target=transcription_worker, daemon=True).start()
+        st.session_state.transcription_started = True
 
 # --- Load Whisper Model ---
 @st.cache_resource(show_spinner=False)
@@ -56,11 +62,11 @@ st.markdown(
 # --- Transcription Worker ---
 audio_queue = queue.Queue()
 
-def audio_callback(frame: av.AudioFrame) -> av.AudioFrame:
+def audio_callback(frame):
     audio = frame.to_ndarray()
-    audio = audio.flatten().astype(np.float32) / 32768.0
-    audio_queue.put(audio)
-    return frame
+    audio_mono = audio.mean(axis=1)  # convert to mono
+    audio_queue.put(audio_mono)
+    return frame  # still needed to display input level
 
 def transcription_worker():
     buffer = []
@@ -90,10 +96,8 @@ with st.sidebar:
     webrtc_ctx = webrtc_streamer(
         key="transcriber",
         mode=WebRtcMode.SENDONLY,
-        in_audio=True,
-        video_processor_factory=None,
-        audio_receiver_size=1024,
-        sendback_audio=False,
+        audio_receiver_size=256,
+        media_stream_constraints={"audio": True, "video": False},
         audio_frame_callback=audio_callback,
     )
 
