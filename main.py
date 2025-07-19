@@ -101,11 +101,13 @@ with st.sidebar:
         audio_frame_callback=audio_callback,
     )
 
-    if webrtc_ctx.state.playing:
+    if webrtc_ctx.state.playing and not st.session_state.get("transcription_started", False):
         threading.Thread(target=transcription_worker, daemon=True).start()
-        if st.session_state.audio_text_buffer:
-            st.info("🧠 Live transcription:")
-            st.markdown(f"**{st.session_state.audio_text_buffer.strip()}**")
+        st.session_state.transcription_started = True
+
+    if st.session_state.audio_text_buffer:
+        st.info("🧠 Live transcription:")
+        st.markdown(f"**{st.session_state.audio_text_buffer.strip()}**")
 
 
 # --- Text Area ---
