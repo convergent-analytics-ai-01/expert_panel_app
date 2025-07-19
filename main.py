@@ -46,50 +46,61 @@ st.markdown(
 )
 #st.markdown("Ask a question and hear from trusted product development voices.")
 
-# --- Sidebar: Microphone Input ---
+# --- Session State Initialization ---
+if "user_question" not in st.session_state:
+    st.session_state.user_question = ""
+if "expert_output" not in st.session_state:
+    st.session_state.expert_output = ""
+if "history" not in st.session_state:
+    st.session_state.history = []
+if "audio_input_counter" not in st.session_state:
+    st.session_state.audio_input_counter = 0
+
+# --- Streamlit Sidebar Mic Section ---
 with st.sidebar:
     st.header("🎤 Voice Input")
     st.caption("Or speak your question instead of typing it.")
 
-    # At the top of your script (if not already present)
-    if "audio_input_counter" not in st.session_state:
-        st.session_state.audio_input_counter = 0
-    
-    # --- Streamlit Sidebar Mic Section ---
     uploaded_audio = st.audio_input(
         label="🎙️ Record Your Question",
         key=f"audio_input_{st.session_state.audio_input_counter}"
     )
-    
+
     if uploaded_audio is not None:
         try:
             st.info("🧠 Transcribing audio...")
-    
+
             # Save uploaded audio to a temporary WAV file
             with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
                 tmp_file.write(uploaded_audio.read())
                 tmp_filename = tmp_file.name
-    
-            # Azure Speech SDK configuration
-            speech_config = speechsdk.SpeechConfig(subscription=AZURE_SPEECH_KEY, region=AZURE_SPEECH_REGION)
+
+            # Configure Azure Speech SDK
+            speech_config = speechsdk.SpeechConfig(
+                subscription=AZURE_SPEECH_KEY,
+                region=AZURE_SPEECH_REGION
+            )
             audio_config = speechsdk.audio.AudioConfig(filename=tmp_filename)
-            recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
-    
-            # Perform speech recognition
+            recognizer = speechsdk.SpeechRecognizer(
+                speech_config=speech_config,
+                audio_config=audio_config
+            )
+
+            # Run speech recognition
             result = recognizer.recognize_once()
-    
+
             if result.reason == speechsdk.ResultReason.RecognizedSpeech:
                 st.success("✅ Transcription Complete")
                 current = st.session_state.user_question.strip()
                 st.session_state.user_question = f"{current} {result.text}".strip()
-            
-                # Reset the mic widget for next recording
+
+                # Reset audio widget to allow new input
                 st.session_state.audio_input_counter += 1
-                st.experimental_rerun()  # 🔁 Force re-render so mic widget resets
-    
+                st.rerun()
+
             else:
                 st.error(f"❌ Speech Recognition Failed: {result.reason}")
-    
+
         except Exception as e:
             st.error(f"❌ Error: {str(e)}")
 
