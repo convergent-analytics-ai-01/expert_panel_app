@@ -47,7 +47,7 @@ if "audio_input_counter" not in st.session_state:
 # --- Helper: Whisper Transcription ---
 @st.cache_resource(show_spinner=False)
 def load_whisper_model():
-    return WhisperModel("base.en", compute_type="int8")
+    return WhisperModel("medium.en", compute_type="int8") # Try "float16" or "float32" if your hardware allows
 
 model = load_whisper_model()
 
