@@ -111,6 +111,7 @@ with st.container():
     with col2:
         if st.button("🧹 Clear"):
             st.session_state.user_question = ""
+
 with st.container():   
     col1, col2 = st.columns([6, 1])  # Adjust column proportions to give more space
 
@@ -124,6 +125,8 @@ with st.container():
             label_visibility="collapsed"
         )
     with col2:
+        if st.button("🧹 Clear"):
+            st.session_state.user_question = ""
         
 
 # --- Submit Button ---
