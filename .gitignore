@@ -1,0 +1,21 @@
+# Python & Streamlit ignores
+__pycache__/
+*.py[cod]
+.venv/
+env/
+venv/
+ENV/
+.streamlit/
+*.log
+
+# Secrets
+.env
+.env.*
+
+# IDEs
+.vscode/
+.idea/
+
+# System
+.DS_Store
+Thumbs.db
