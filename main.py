@@ -36,7 +36,7 @@ st.markdown(
 
 # --- Session State Initialization ---
 if "user_question" not in st.session_state:
-    st.session_state["user_question] = ""
+    st.session_state["user_question"] = ""
 if "expert_output" not in st.session_state:
     st.session_state.expert_output = ""
 if "history" not in st.session_state:
