@@ -1,4 +1,3 @@
-
 # --- Imports ---
 import streamlit as st
 import azure.cognitiveservices.speech as speechsdk
@@ -15,8 +14,23 @@ import sys
 
 st.sidebar.text(f"Running Python {sys.version}")
 
+# --- Debug Log System ---
+if "debug_logs" not in st.session_state:
+    st.session_state.debug_logs = []
+
+def log_debug(message):
+    if st.session_state.get("DEBUG", False):
+        print(message)
+        st.session_state.debug_logs.append(message)
+        st.session_state.debug_logs = st.session_state.debug_logs[-200:]
+
 # Optional: Enable debug output
-DEBUG = st.sidebar.checkbox("Show Debug Logs", value=False)
+st.session_state.DEBUG = st.sidebar.checkbox("Show Debug Logs", value=False)
+
+if st.session_state.DEBUG:
+    st.sidebar.markdown("#### Debug Logs")
+    st.sidebar.button("🧹 Clear Logs", on_click=lambda: st.session_state.update(debug_logs=[]))
+    st.sidebar.text_area("Logs", value="\n".join(st.session_state.debug_logs), height=200)
 
 # --- Configuration ---
 ENDPOINT_URL = "https://expertpanel-endpoint.eastus.inference.ml.azure.com/score"
@@ -45,39 +59,36 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext):
     results = []
 
     def recognized_handler(evt):
-        if DEBUG:
-            print("✅ Azure recognized:", evt.result.text)
+        log_debug(f"✅ Azure recognized: {evt.result.text}")
         if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
             results.append(evt.result.text)
 
     def stop_handler(evt):
-        if DEBUG:
-            print("🛑 Session stopped or cancelled.")
+        log_debug("🛑 Session stopped or cancelled.")
         st.session_state.transcribing = False
 
     transcriber.recognized.connect(recognized_handler)
     transcriber.session_stopped.connect(stop_handler)
     transcriber.canceled.connect(stop_handler)
 
-    transcriber.start_continuous_recognition_async().get()
-    if DEBUG:
-        print("🎙️ Started Azure recognition...")
+    transcriber.start_continuous_recognition_async()
+    log_debug("🎙️ Started Azure recognition...")
 
     while webrtc_ctx.state.playing:
         audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=1)
         if not audio_frames:
-            if DEBUG:
-                print("⚠️ No audio frames received...")
+            log_debug("⚠️ No audio frames received...")
             continue
 
         for frame in audio_frames:
             audio_data = frame.to_ndarray()
 
             if frame.sample_rate != 16000:
-                if DEBUG:
-                    print(f"🔄 Resampling from {frame.sample_rate} Hz to 16000 Hz")
+                log_debug(f"🔄 Resampling from {frame.sample_rate} Hz to 16000 Hz")
+
                 if audio_data.ndim > 1:
                     audio_data = np.mean(audio_data, axis=0)
+
                 audio_data = audio_data.astype(np.float32)
                 original_indices = np.linspace(0, 1, num=len(audio_data))
                 new_length = int(len(audio_data) * 16000 / frame.sample_rate)
@@ -90,23 +101,17 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext):
 
         time.sleep(0.1)
 
-    time.sleep(1.0)
-    transcriber.stop_continuous_recognition_async().get()
+    transcriber.stop_continuous_recognition()
     push_stream.close()
 
     full_text = " ".join(results).strip()
     st.session_state.transcript_buffer = full_text
-
-    if DEBUG:
-        print(f"🔍 Final result count: {len(results)}")
-        print("✅ Final transcript:", full_text)
+    log_debug(f"✅ Final transcript: {full_text}")
 
     if full_text:
         st.toast("📝 Voice transcription added to input box")
     else:
         st.toast("⚠️ No recognizable speech detected. Try again.", icon="⚠️")
-        if DEBUG:
-            print("📭 Empty transcript or no final recognition returned.")
 
 # --- UI Layout ---
 st.set_page_config(page_title="Expert Agent Panel", layout="wide")
@@ -116,6 +121,7 @@ st.markdown("<h2 style='font-size:1.6rem; font-weight:600; color:#143d7a;'>Produ
 with st.sidebar:
     st.header("🎤 Voice Input (WebRTC + Azure)")
     rtc_config = {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+
     webrtc_ctx = webrtc_streamer(
         key="azure-stream",
         mode=WebRtcMode.SENDONLY,
@@ -123,6 +129,7 @@ with st.sidebar:
         rtc_configuration=rtc_config,
         media_stream_constraints={"audio": True, "video": False},
     )
+
     if webrtc_ctx and webrtc_ctx.state.playing:
         st.success("🎙️ Microphone is live and recording...")
         if not st.session_state.transcribing:
@@ -140,6 +147,7 @@ with col1:
     if st.session_state.transcript_buffer:
         st.session_state.user_question += " " + st.session_state.transcript_buffer
         st.session_state.transcript_buffer = ""
+
     st.text_area(
         label="User Question",
         key="user_question",
