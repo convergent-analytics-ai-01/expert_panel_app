@@ -194,9 +194,13 @@ if st.session_state.history:
 
 # --- Helper to clean transcript for audio ---
 def prepare_text_for_tts(text):
-    text = re.sub(r"\\*\\*([^*]+)\\*\\*", r"\\1", text)
-    lines = text.split("\\n")
+    # Remove markdown bold formatting
+    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+
+    # Split into lines based on actual newlines
+    lines = text.split("\n")
     spoken = []
+
     for line in lines:
         line = line.strip()
         if re.match(r"^(Host:?|🧑‍💻 Host:)", line):
@@ -210,6 +214,7 @@ def prepare_text_for_tts(text):
             spoken.append("Donald Reinertsen responds: " + content)
         else:
             spoken.append(line)
+
     return " ".join(spoken)
 
 # --- Sidebar: TTS Feature ---
@@ -230,6 +235,7 @@ with st.sidebar:
         
                 # Synthesize
                 text_for_audio = prepare_text_for_tts(st.session_state.expert_output)
+                st.code(text_for_audio, language="text")
                 result = synthesizer.speak_text_async(text_for_audio).get()
         
                 if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
