@@ -1,3 +1,4 @@
+
 # --- Imports ---
 import streamlit as st
 import azure.cognitiveservices.speech as speechsdk
@@ -58,7 +59,7 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext):
     transcriber.session_stopped.connect(stop_handler)
     transcriber.canceled.connect(stop_handler)
 
-    transcriber.start_continuous_recognition_async()
+    transcriber.start_continuous_recognition_async().get()
     if DEBUG:
         print("🎙️ Started Azure recognition...")
 
@@ -75,11 +76,8 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext):
             if frame.sample_rate != 16000:
                 if DEBUG:
                     print(f"🔄 Resampling from {frame.sample_rate} Hz to 16000 Hz")
-
-                # Flatten multi-channel audio to mono if needed
                 if audio_data.ndim > 1:
                     audio_data = np.mean(audio_data, axis=0)
-
                 audio_data = audio_data.astype(np.float32)
                 original_indices = np.linspace(0, 1, num=len(audio_data))
                 new_length = int(len(audio_data) * 16000 / frame.sample_rate)
@@ -87,26 +85,28 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext):
                 audio_data = np.interp(new_indices, original_indices, audio_data)
                 audio_data = np.clip(audio_data, -32768, 32767).astype(np.int16)
 
-            # Flatten final array just in case (fixes shape (1, n))
             audio_data = audio_data.flatten()
-
             push_stream.write(audio_data.tobytes())
 
         time.sleep(0.1)
 
-    transcriber.stop_continuous_recognition()
+    time.sleep(1.0)
+    transcriber.stop_continuous_recognition_async().get()
     push_stream.close()
 
     full_text = " ".join(results).strip()
     st.session_state.transcript_buffer = full_text
 
     if DEBUG:
+        print(f"🔍 Final result count: {len(results)}")
         print("✅ Final transcript:", full_text)
 
     if full_text:
         st.toast("📝 Voice transcription added to input box")
     else:
         st.toast("⚠️ No recognizable speech detected. Try again.", icon="⚠️")
+        if DEBUG:
+            print("📭 Empty transcript or no final recognition returned.")
 
 # --- UI Layout ---
 st.set_page_config(page_title="Expert Agent Panel", layout="wide")
@@ -116,7 +116,6 @@ st.markdown("<h2 style='font-size:1.6rem; font-weight:600; color:#143d7a;'>Produ
 with st.sidebar:
     st.header("🎤 Voice Input (WebRTC + Azure)")
     rtc_config = {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
-
     webrtc_ctx = webrtc_streamer(
         key="azure-stream",
         mode=WebRtcMode.SENDONLY,
@@ -124,7 +123,6 @@ with st.sidebar:
         rtc_configuration=rtc_config,
         media_stream_constraints={"audio": True, "video": False},
     )
-
     if webrtc_ctx and webrtc_ctx.state.playing:
         st.success("🎙️ Microphone is live and recording...")
         if not st.session_state.transcribing:
@@ -142,7 +140,6 @@ with col1:
     if st.session_state.transcript_buffer:
         st.session_state.user_question += " " + st.session_state.transcript_buffer
         st.session_state.transcript_buffer = ""
-
     st.text_area(
         label="User Question",
         key="user_question",
@@ -182,7 +179,7 @@ if st.button("💻 Submit Question", disabled=not st.session_state.user_question
 # --- Display Expert Response ---
 if st.session_state.expert_output:
     def format_transcript(text):
-        lines = text.split("\\n")
+        lines = text.split("\n")
         formatted = []
         for line in lines:
             if line.startswith("Host:"):
