@@ -279,7 +279,8 @@ with col1:
         label_visibility="collapsed" # Hide the default label for a cleaner look
     )
 with col2:
-    st.button("🧹 Clear", on_on_click=clear_user_question)
+    # --- FIX HERE: Changed 'on_on_click' to 'on_click' ---
+    st.button("🧹 Clear", on_click=clear_user_question)
 
 # --- Submit Button (unchanged) ---
 if st.button("💻 Submit Question", disabled=not st.session_state.user_question.strip()):
