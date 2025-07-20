@@ -60,29 +60,27 @@ API_KEY = st.secrets["expertpanel_promptflow_apikey"]
 AZURE_SPEECH_KEY = st.secrets["AZURE_SPEECH_KEY"]
 AZURE_SPEECH_REGION = st.secrets["AZURE_SPEECH_REGION"]
 
-# --- Setup Azure Transcriber (for continuous recognition - REVISED WITH NEW TIMEOUTS) ---
+# --- Setup Azure Transcriber (for continuous recognition - REVISED) ---
 def setup_transcriber(audio_config, message_queue):
     speech_config = speechsdk.SpeechConfig(subscription=AZURE_SPEECH_KEY, region=AZURE_SPEECH_REGION)
     speech_config.speech_recognition_language = "en-US"
 
     # Set various timeout properties to allow for longer pauses and speech detection
-    # This is in milliseconds. 15 seconds is quite long, for testing.
+    # Keep these as they are standard and generally supported
     speech_config.set_property(
         speechsdk.PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "15000" # 15 seconds of silence before finalizing an utterance
     )
-    # This timeout is for how long the service will wait for *initial* speech detection.
     speech_config.set_property(
         speechsdk.PropertyId.SpeechServiceConnection_InitialSilenceTimeoutMs, "15000" # 15 seconds for speech to start
     )
-    # This is crucial for continuous recognition: max audio duration without speech before it stops.
-    # Set to a very high value for debugging long utterances/pauses.
-    speech_config.set_property(
-        speechsdk.PropertyId.FromContinuousRecognitionResult_NoEndpointSpeechDetectedTimeoutMs, "300000" # 5 minutes (300 seconds) without detecting speech endpoint
-    )
-    # This relates to how long it waits for speech to *begin* after connection for a segment.
-    speech_config.set_property(
-        speechsdk.PropertyId.FromContinuousRecognitionResult_SpeechStartDetectedTimeoutMs, "10000" # 10 seconds for speech start within a segment
-    )
+    # --- REMOVED THE FOLLOWING LINES DUE TO AttributeError ---
+    # speech_config.set_property(
+    #     speechsdk.PropertyId.FromContinuousRecognitionResult_NoEndpointSpeechDetectedTimeoutMs, "300000"
+    # )
+    # speech_config.set_property(
+    #     speechsdk.PropertyId.FromContinuousRecognitionResult_SpeechStartDetectedTimeoutMs, "10000"
+    # )
+    # --- END REMOVED ---
 
     return speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
 
