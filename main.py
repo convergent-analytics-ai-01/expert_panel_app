@@ -11,58 +11,57 @@ import requests
 from io import BytesIO
 from datetime import datetime
 import sys
+import queue # Import the queue module
+
+# --- Constants for Queue Messages ---
+LOG_MESSAGE = "log"
+TRANSCRIPT_MESSAGE = "transcript"
 
 st.sidebar.text(f"Running Python {sys.version}")
 
+# --- Initialize Session State (including the queue) ---
+for key in ["user_question", "expert_output", "history", "transcribing", "transcript_buffer", "debug_logs"]:
+    if key not in st.session_state:
+        st.session_state[key] = "" if "buffer" in key or "question" in key or "output" in key else [] if key == "history" or key == "debug_logs" else False
+
+# Initialize the thread-safe queue in session state
+if "message_queue" not in st.session_state:
+    st.session_state.message_queue = queue.Queue()
+
 # --- Debug Log System ---
-if "debug_logs" not in st.session_state:
-    st.session_state.debug_logs = []
-
+# log_debug now *puts* messages into the queue, instead of directly modifying session_state.debug_logs
 def log_debug(message):
-    # Only log if debug is enabled
     if st.session_state.get("DEBUG", False):
-        # Print to console (visible in Streamlit Cloud app logs)
-        print(f"DEBUG: {message}")
-        # Append to session state for sidebar display
-        st.session_state.debug_logs.append(message)
-        # Keep only the last 200 logs to prevent memory issues
-        st.session_state.debug_logs = st.session_state.debug_logs[-200:]
+        try:
+            # Put a tuple (message_type, content) into the queue
+            st.session_state.message_queue.put((LOG_MESSAGE, message))
+            # Also print to console for immediate visibility in Streamlit Cloud logs
+            print(f"DEBUG (queued): {message}")
+        except Exception as e:
+            # Fallback print if queueing fails (e.g., during app shutdown)
+            print(f"ERROR: Could not put debug message into queue: {message} - {e}")
 
-# Ensure DEBUG state is initialized from checkbox value (important for first run)
+# Ensure DEBUG state is initialized from checkbox value
 if "DEBUG" not in st.session_state:
     st.session_state.DEBUG = False
 
-# Optional: Enable debug output
-# The value of the checkbox will persist in st.session_state.DEBUG across reruns
 st.session_state.DEBUG = st.sidebar.checkbox("Show Debug Logs", value=st.session_state.DEBUG)
 
 if st.session_state.DEBUG:
     st.sidebar.markdown("#### Debug Logs")
-    # Clear logs button
     st.sidebar.button("🧹 Clear Logs", on_click=lambda: st.session_state.update(debug_logs=[]))
-    # Text area for logs. Note: Logs update after a Streamlit rerun.
     st.sidebar.text_area(
         "Logs",
         value="\n".join(st.session_state.debug_logs),
         height=200,
-        placeholder="Logs will appear here after events trigger a Streamlit rerun (e.g., stopping the microphone)."
+        placeholder="Logs will appear here after events trigger a Streamlit rerun (e.g., stopping the microphone or user interaction)."
     )
-    # This print will appear in Streamlit Cloud's console logs,
-    # helping confirm if the debug logs list itself is being populated.
-    print(f"Current debug logs count: {len(st.session_state.debug_logs)}")
-
 
 # --- Configuration ---
 ENDPOINT_URL = "https://expertpanel-endpoint.eastus.inference.ml.azure.com/score"
-# Ensure these keys are correctly set in your Streamlit secrets
 API_KEY = st.secrets["expertpanel_promptflow_apikey"]
 AZURE_SPEECH_KEY = st.secrets["AZURE_SPEECH_KEY"]
 AZURE_SPEECH_REGION = st.secrets["AZURE_SPEECH_REGION"]
-
-# --- Initialize Session State ---
-for key in ["user_question", "expert_output", "history", "transcribing", "transcript_buffer"]:
-    if key not in st.session_state:
-        st.session_state[key] = "" if "buffer" in key or "question" in key or "output" in key else [] if key == "history" else False
 
 # --- Setup Azure Transcriber ---
 def setup_transcriber(audio_config):
@@ -70,56 +69,63 @@ def setup_transcriber(audio_config):
     speech_config.speech_recognition_language = "en-US"
     return speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
 
-# --- Transcription Worker ---
-def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext):
+# --- Transcription Worker (runs in a separate thread) ---
+def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext, message_queue: queue.Queue):
+    # This function should NOT directly interact with st.session_state
+    # Instead, it sends messages via the queue.
+
     format = AudioStreamFormat(samples_per_second=16000, bits_per_sample=16, channels=1)
     push_stream = PushAudioInputStream(stream_format=format)
     audio_config = AudioConfig(stream=push_stream)
-    transcriber = setup_transcriber(audio_config)
+
+    try:
+        transcriber = setup_transcriber(audio_config)
+    except Exception as e:
+        message_queue.put((LOG_MESSAGE, f"❌ Failed to set up Azure Speech Recognizer: {e}"))
+        return # Exit the thread early if setup fails
 
     results = []
 
     def recognized_handler(evt):
-        log_debug(f"✅ Azure recognized: {evt.result.text}")
+        # Still uses message_queue.put, for logs
+        message_queue.put((LOG_MESSAGE, f"✅ Azure recognized: {evt.result.text}"))
         if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
             results.append(evt.result.text)
 
-    def stop_handler(evt):
-        log_debug("🛑 Session stopped or cancelled.")
-        st.session_state.transcribing = False # Update state on main thread (safe)
-
-        # Added detailed logging for cancellation events
+    def canceled_handler(evt):
+        message_queue.put((LOG_MESSAGE, "🛑 Azure recognition session cancelled."))
         if evt.result.reason == speechsdk.ResultReason.Canceled:
             cancellation_details = evt.result.cancellation_details
-            log_debug(f"🛑 Cancellation Reason: {cancellation_details.reason}")
+            message_queue.put((LOG_MESSAGE, f"🛑 Cancellation Reason: {cancellation_details.reason}"))
             if cancellation_details.reason == speechsdk.CancellationReason.Error:
-                log_debug(f"🛑 Cancellation Error Details: {cancellation_details.error_details} (Error Code: {cancellation_details.error_code})")
+                message_queue.put((LOG_MESSAGE, f"🛑 Cancellation Error Details: {cancellation_details.error_details} (Error Code: {cancellation_details.error_code})"))
             elif cancellation_details.reason == speechsdk.CancellationReason.EndOfStream:
-                log_debug("🛑 End of audio stream detected by Azure Speech Service.")
-        else:
-            log_debug(f"🛑 Stop Reason: {evt.result.reason}")
+                message_queue.put((LOG_MESSAGE, "🛑 End of audio stream detected by Azure Speech Service."))
+        message_queue.put((LOG_MESSAGE, "🛑 Signalling transcription stop."))
 
+    def session_stopped_handler(evt):
+        message_queue.put((LOG_MESSAGE, "🛑 Azure recognition session stopped."))
 
     transcriber.recognized.connect(recognized_handler)
-    transcriber.session_stopped.connect(stop_handler)
-    transcriber.canceled.connect(stop_handler)
+    transcriber.session_stopped.connect(session_stopped_handler)
+    transcriber.canceled.connect(canceled_handler)
 
     try:
         transcriber.start_continuous_recognition_async()
-        log_debug("🎙️ Started Azure recognition...")
+        message_queue.put((LOG_MESSAGE, "🎙️ Started Azure recognition..."))
 
-        while webrtc_ctx.state.playing:
+        while webrtc_ctx.state.playing: # This state reflects the microphone status
             audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=1)
             if not audio_frames:
-                log_debug("⚠️ No audio frames received...")
-                time.sleep(0.1) # Prevent busy-waiting
+                message_queue.put((LOG_MESSAGE, "⚠️ No audio frames received..."))
+                time.sleep(0.1)
                 continue
 
             for frame in audio_frames:
                 audio_data = frame.to_ndarray()
 
                 if frame.sample_rate != 16000:
-                    log_debug(f"🔄 Resampling from {frame.sample_rate} Hz to 16000 Hz")
+                    message_queue.put((LOG_MESSAGE, f"🔄 Resampling from {frame.sample_rate} Hz to 16000 Hz"))
                     if audio_data.ndim > 1:
                         audio_data = np.mean(audio_data, axis=0)
                     audio_data = audio_data.astype(np.float32)
@@ -132,28 +138,57 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext):
                 audio_data = audio_data.flatten()
                 push_stream.write(audio_data.tobytes())
 
-            time.sleep(0.05) # Shorter sleep for more responsive audio processing
+            time.sleep(0.05) # Process audio frames smoothly
+
     except Exception as e:
-        log_debug(f"❌ Error in transcription thread: {e}")
+        message_queue.put((LOG_MESSAGE, f"❌ Error in transcription thread: {e}"))
     finally:
-        transcriber.stop_continuous_recognition_async().get() # Ensure stop is awaited
-        push_stream.close()
-        log_debug("🎙️ Azure recognition stopped and push stream closed.")
+        # Ensure recognition is stopped and stream is closed
+        try:
+            transcriber.stop_continuous_recognition_async().get()
+            message_queue.put((LOG_MESSAGE, "🎙️ Azure recognition stopped."))
+        except Exception as e:
+            message_queue.put((LOG_MESSAGE, f"❌ Error stopping Azure recognition: {e}"))
 
+        try:
+            push_stream.close()
+            message_queue.put((LOG_MESSAGE, "🎙️ Push audio stream closed."))
+        except Exception as e:
+            message_queue.put((LOG_MESSAGE, f"❌ Error closing push stream: {e}"))
 
-    full_text = " ".join(results).strip()
-    st.session_state.transcript_buffer = full_text
-    log_debug(f"✅ Final transcript: '{full_text}'")
+        full_text = " ".join(results).strip()
+        # Put the final transcript into the queue for the main thread to pick up
+        message_queue.put((TRANSCRIPT_MESSAGE, full_text))
+        message_queue.put((LOG_MESSAGE, f"✅ Final transcript sent to queue: '{full_text}'"))
 
-    # Display toast messages (these will appear on the next rerun)
-    if full_text:
-        st.toast("📝 Voice transcription added to input box")
-    else:
-        st.toast("⚠️ No recognizable speech detected. Try again.", icon="⚠️")
 
 # --- UI Layout ---
 st.set_page_config(page_title="Expert Agent Panel", layout="wide")
 st.markdown("<h2 style='font-size:1.6rem; font-weight:600; color:#143d7a;'>Product Development Expert Panel Discussion</h2>", unsafe_allow_html=True)
+
+# --- Process Messages from Queue (Main Streamlit Thread) ---
+# This block runs on every Streamlit rerun
+while not st.session_state.message_queue.empty():
+    try:
+        message_type, content = st.session_state.message_queue.get_nowait()
+        if message_type == LOG_MESSAGE:
+            st.session_state.debug_logs.append(content)
+            # Keep only the last 200 logs
+            st.session_state.debug_logs = st.session_state.debug_logs[-200:]
+        elif message_type == TRANSCRIPT_MESSAGE:
+            st.session_state.transcript_buffer = content
+            # Also show toast here, as it's now in the main thread context
+            if content:
+                st.toast("📝 Voice transcription added to input box")
+            else:
+                st.toast("⚠️ No recognizable speech detected. Try again.", icon="⚠️")
+    except queue.Empty: # Should not happen with while not empty(), but good practice
+        pass
+    except Exception as e:
+        st.error(f"Error processing message from queue: {e}")
+        # Append to main logs if possible, but avoid recursive queueing
+        st.session_state.debug_logs.append(f"ERROR processing queue: {e}")
+
 
 # --- Sidebar: Voice Input with WebRTC ---
 with st.sidebar:
@@ -171,12 +206,13 @@ with st.sidebar:
     if webrtc_ctx.state.playing:
         st.success("🎙️ Microphone is live and recording...")
         if not st.session_state.transcribing:
-            # Start transcription thread only if not already running
-            threading.Thread(target=transcribe_webrtc, args=(webrtc_ctx,), daemon=True).start()
+            # Pass the queue to the thread
+            threading.Thread(target=transcribe_webrtc, args=(webrtc_ctx, st.session_state.message_queue,), daemon=True).start()
             st.session_state.transcribing = True
     else: # webrtc_ctx is None or webrtc_ctx.state.playing is False
         st.warning("🎤 Click START and allow microphone access.")
         # Reset transcribing state when microphone is not playing
+        # This will happen on the rerun triggered by webrtc_streamer's state change
         if st.session_state.transcribing:
             st.session_state.transcribing = False
 
@@ -187,10 +223,9 @@ def clear_user_question():
 
 col1, col2 = st.columns([6, 2])
 with col1:
-    # This block executes on every rerun.
-    # If transcript_buffer was populated by the thread, it will now be applied.
     if st.session_state.transcript_buffer:
-        log_debug(f"Main UI: Applying transcript from buffer to user_question: '{st.session_state.transcript_buffer}'")
+        # Debug log for when the UI *applies* the transcript
+        log_debug(f"Main UI: Appending transcript to user_question: '{st.session_state.transcript_buffer}'")
         st.session_state.user_question += " " + st.session_state.transcript_buffer
         st.session_state.transcript_buffer = "" # Clear buffer after use
 
