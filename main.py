@@ -15,6 +15,8 @@ from azure.cognitiveservices.speech.audio import AudioOutputConfig
 # --- Configuration ---
 ENDPOINT_URL = "https://expertpanel-endpoint.eastus.inference.ml.azure.com/score"
 API_KEY = st.secrets["expertpanel_promptflow_apikey"]
+AZURE_SPEECH_KEY = st.secrets["AZURE_SPEECH_KEY"]
+AZURE_SPEECH_REGION = st.secrets["AZURE_SPEECH_REGION"]
 
 def clear_user_question():
     st.session_state["user_question"] = ""
