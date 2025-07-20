@@ -128,7 +128,7 @@ with st.container():
         if st.button("🧹 Clear", on_click=clear_user_question):
             pass  # The reset happens in the callback
         st.markdown(
-            "<h2 style='font-size:1.0rem; font-weight:600;'>Expand the text box with the <br>lower right hash marks.</h2>",
+            "<h2 style='font-size:0.8rem; font-weight:400;'>Expand the text box with the <br>lower right hash marks.</h2>",
             unsafe_allow_html=True
         )
 
@@ -229,7 +229,7 @@ with st.sidebar:
                 speech_config.speech_synthesis_voice_name = voice
         
                 text_for_audio = prepare_text_for_tts(st.session_state.expert_output)
-                st.code(text_for_audio, language="text")
+                # st.code(text_for_audio, language="text")
         
                 # Create a temp WAV file to write TTS output
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
