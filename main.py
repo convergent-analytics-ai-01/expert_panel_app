@@ -6,7 +6,7 @@ from streamlit_webrtc import webrtc_streamer, WebRtcMode, WebRtcStreamerContext
 import threading
 import numpy as np
 import time
-from azure.cognitiveservices.speech.audio import PushAudioInputStream, AudioConfig
+from azure.cognitiveservices.speech.audio import AudioConfig # Note: PushAudioInputStream is no longer needed
 import requests
 from io import BytesIO
 from datetime import datetime
@@ -16,14 +16,15 @@ import queue
 # --- Constants for Queue Messages ---
 LOG_MESSAGE = "log"
 TRANSCRIPT_MESSAGE = "transcript"
-PARTIAL_TRANSCRIPT_MESSAGE = "partial_transcript"
+# PARTIAL_TRANSCRIPT_MESSAGE is removed as it's not relevant for batch processing
 
 st.sidebar.text(f"Running Python {sys.version}")
 
 # --- Initialize Session State (including the queue) ---
-for key in ["user_question", "expert_output", "history", "transcribing", "transcript_buffer", "debug_logs", "current_recognition_text"]:
+# current_recognition_text is removed from initialization as it's not used in batch mode
+for key in ["user_question", "expert_output", "history", "transcribing", "transcript_buffer", "debug_logs"]:
     if key not in st.session_state:
-        st.session_state[key] = "" if "buffer" in key or "question" in key or "output" in key or key == "current_recognition_text" else \
+        st.session_state[key] = "" if "buffer" in key or "question" in key or "output" in key else \
                                 [] if key == "history" or key == "debug_logs" else False
 
 if "message_queue" not in st.session_state:
@@ -44,15 +45,15 @@ st.session_state.DEBUG = st.sidebar.checkbox("Show Debug Logs", value=st.session
 
 if st.session_state.DEBUG:
     st.sidebar.markdown("#### Debug Logs")
-    st.sidebar.button("🧹 Clear Logs", on_click=lambda: st.session_state.update(debug_logs=[], current_recognition_text=""))
+    # current_recognition_text cleared is also removed here
+    st.sidebar.button("🧹 Clear Logs", on_click=lambda: st.session_state.update(debug_logs=[]))
     st.sidebar.text_area(
         "Logs",
         value="\n".join(st.session_state.debug_logs),
         height=200,
         placeholder="Logs will appear here after events trigger a Streamlit rerun (e.g., stopping the microphone or user interaction)."
     )
-    st.sidebar.markdown("#### Live Recognition")
-    st.sidebar.code(st.session_state.current_recognition_text, language="text")
+    # "Live Recognition" section is removed from the UI
 
 
 # --- Configuration ---
@@ -61,126 +62,100 @@ API_KEY = st.secrets["expertpanel_promptflow_apikey"]
 AZURE_SPEECH_KEY = st.secrets["AZURE_SPEECH_KEY"]
 AZURE_SPEECH_REGION = st.secrets["AZURE_SPEECH_REGION"]
 
-# --- Setup Azure Transcriber (REVISED) ---
-def setup_transcriber(audio_config):
+# --- Setup SpeechConfig only (REVISED for Batch) ---
+def setup_speech_config():
     speech_config = speechsdk.SpeechConfig(subscription=AZURE_SPEECH_KEY, region=AZURE_SPEECH_REGION)
     speech_config.speech_recognition_language = "en-US"
-
-    # --- ADDED: Adjust silence timeout properties ---
-    # Increase the end silence timeout to allow for longer pauses within a continuous utterance.
-    # Default is often 500-1000ms. Try 3000ms (3 seconds) initially.
+    # Silence timeouts are less critical for batch but can be kept for consistency
     speech_config.set_property(
         speechsdk.PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "3000"
     )
-    # You might also adjust initial silence timeout if recognition is slow to start
     speech_config.set_property(
-        speechsdk.PropertyId.SpeechServiceConnection_InitialSilenceTimeoutMs, "5000" # e.g., 5 seconds
+        speechsdk.PropertyId.SpeechServiceConnection_InitialSilenceTimeoutMs, "5000"
     )
-    # --- END ADDED ---
+    return speech_config
 
-    return speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
-
-# --- Transcription Worker (runs in a separate thread) ---
+# --- Transcription Worker (REVISED for Batch Recognition) ---
 def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext, message_queue: queue.Queue):
-    format = AudioStreamFormat(samples_per_second=16000, bits_per_sample=16, channels=1)
-    push_stream = PushAudioInputStream(stream_format=format)
-    audio_config = AudioConfig(stream=push_stream)
-
-    transcriber = None
-
-    try:
-        transcriber = setup_transcriber(audio_config)
-    except Exception as e:
-        message_queue.put((LOG_MESSAGE, f"❌ Failed to set up Azure Speech Recognizer: {e}"))
-        message_queue.put((TRANSCRIPT_MESSAGE, ""))
-        return
-
-    results = []
-    current_recognizing_text_list = [""]
-
-    def recognized_handler(evt):
-        message_queue.put((LOG_MESSAGE, f"✅ Azure recognized (final): '{evt.result.text}'"))
-        if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
-            results.append(evt.result.text)
-            current_recognizing_text_list[0] = ""
-            message_queue.put((PARTIAL_TRANSCRIPT_MESSAGE, current_recognizing_text_list[0]))
-
-    def recognizing_handler(evt):
-        message_queue.put((LOG_MESSAGE, f"📝 Azure recognizing (partial): '{evt.result.text}'"))
-        current_recognizing_text_list[0] = evt.result.text
-        message_queue.put((PARTIAL_TRANSCRIPT_MESSAGE, current_recognizing_text_list[0]))
-
-    def canceled_handler(evt):
-        message_queue.put((LOG_MESSAGE, "🛑 Azure recognition session cancelled."))
-        if evt.result.reason == speechsdk.ResultReason.Canceled:
-            cancellation_details = evt.result.cancellation_details
-            message_queue.put((LOG_MESSAGE, f"🛑 Cancellation Reason: {cancellation_details.reason}"))
-            if cancellation_details.reason == speechsdk.CancellationReason.Error:
-                message_queue.put((LOG_MESSAGE, f"🛑 Cancellation Error Details: {cancellation_details.error_details} (Error Code: {cancellation_details.error_code})"))
-            elif cancellation_details.reason == speechsdk.CancellationReason.EndOfStream:
-                message_queue.put((LOG_MESSAGE, "🛑 End of audio stream detected by Azure Speech Service (possible silence timeout)."))
-        message_queue.put((LOG_MESSAGE, "🛑 Signalling transcription stop."))
-        current_recognizing_text_list[0] = ""
-        message_queue.put((PARTIAL_TRANSCRIPT_MESSAGE, current_recognizing_text_list[0]))
-
-    def session_stopped_handler(evt):
-        message_queue.put((LOG_MESSAGE, "🛑 Azure recognition session stopped."))
-
-    transcriber.recognized.connect(recognized_handler)
-    transcriber.recognizing.connect(recognizing_handler)
-    transcriber.session_stopped.connect(session_stopped_handler)
-    transcriber.canceled.connect(canceled_handler)
+    """
+    This function now records all audio into a buffer and then sends it for single-shot batch transcription.
+    """
+    message_queue.put((LOG_MESSAGE, "🎙️ Starting audio recording for batch transcription..."))
+    collected_audio_bytes_list = [] # List to collect raw bytes of audio frames
 
     try:
-        transcriber.start_continuous_recognition_async()
-        message_queue.put((LOG_MESSAGE, "🎙️ Started Azure recognition..."))
-
+        # Collect audio frames while microphone is playing
         while webrtc_ctx.state.playing:
             audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=1)
             if not audio_frames:
-                message_queue.put((LOG_MESSAGE, "⚠️ No audio frames received..."))
-                time.sleep(0.1)
+                message_queue.put((LOG_MESSAGE, "⚠️ No audio frames received during recording..."))
+                time.sleep(0.1) # Prevent busy-waiting
                 continue
 
             for frame in audio_frames:
                 audio_data = frame.to_ndarray()
 
+                # Resampling logic (same as before)
                 if frame.sample_rate != 16000:
-                    message_queue.put((LOG_MESSAGE, f"🔄 Resampling from {frame.sample_rate} Hz to 16000 Hz"))
+                    message_queue.put((LOG_MESSAGE, f"🔄 Resampling from {frame.sample_rate} Hz to 16000 Hz for collection"))
                     if audio_data.ndim > 1:
-                        audio_data = np.mean(audio_data, axis=0)
-                    audio_data = audio_data.astype(np.float32)
+                        audio_data = np.mean(audio_data, axis=0) # Convert to mono if stereo
+                    audio_data = audio_data.astype(np.float32) # Convert to float for interpolation
                     original_indices = np.linspace(0, 1, num=len(audio_data))
                     new_length = int(len(audio_data) * 16000 / frame.sample_rate)
                     new_indices = np.linspace(0, 1, num=new_length)
                     audio_data = np.interp(new_indices, original_indices, audio_data)
-                    audio_data = np.clip(audio_data, -32768, 32767).astype(np.int16)
+                    audio_data = np.clip(audio_data, -32768, 32767).astype(np.int16) # Convert back to int16 PCM
 
-                audio_data = audio_data.flatten()
-                push_stream.write(audio_data.tobytes())
+                collected_audio_bytes_list.append(audio_data.tobytes())
+            time.sleep(0.05) # Small sleep during collection loop
 
-            time.sleep(0.05)
+        message_queue.put((LOG_MESSAGE, "🛑 Recording stopped. Preparing audio for batch transcription..."))
+
+        if not collected_audio_bytes_list:
+            message_queue.put((LOG_MESSAGE, "⚠️ No audio recorded. Cannot transcribe empty audio."))
+            message_queue.put((TRANSCRIPT_MESSAGE, "")) # Send empty transcript
+            return
+
+        # Combine all collected audio bytes into a single BytesIO buffer
+        full_audio_bytes = b"".join(collected_audio_bytes_list)
+        audio_stream_buffer = BytesIO(full_audio_bytes)
+
+        # Setup SpeechConfig and AudioConfig for batch recognition
+        speech_config = setup_speech_config()
+        audio_config = AudioConfig(stream=audio_stream_buffer)
+
+        # Create a new recognizer for the batch
+        recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
+
+        message_queue.put((LOG_MESSAGE, "🎙️ Sending collected audio to Azure for batch recognition..."))
+        # Perform single-shot recognition
+        result = recognizer.recognize_once_async().get()
+
+        full_text = ""
+        if result.reason == speechsdk.ResultReason.RecognizedSpeech:
+            full_text = result.text
+            message_queue.put((LOG_MESSAGE, f"✅ Azure recognized (batch): '{full_text}'"))
+        elif result.reason == speechsdk.ResultReason.NoMatch:
+            message_queue.put((LOG_MESSAGE, "⚠️ No speech could be recognized (NoMatch)."))
+        elif result.reason == speechsdk.ResultReason.Canceled:
+            cancellation_details = result.cancellation_details
+            message_queue.put((LOG_MESSAGE, f"🛑 Azure batch recognition cancelled. Reason: {cancellation_details.reason}"))
+            if cancellation_details.reason == speechsdk.CancellationReason.Error:
+                message_queue.put((LOG_MESSAGE, f"🛑 Cancellation Error Details: {cancellation_details.error_details} (Error Code: {cancellation_details.error_code})"))
+            else:
+                message_queue.put((LOG_MESSAGE, f"🛑 Cancellation Details: {cancellation_details.reason} (no specific error code)"))
+
+        # Send the final transcript to the queue for the main thread to pick up
+        message_queue.put((TRANSCRIPT_MESSAGE, full_text))
+        message_queue.put((LOG_MESSAGE, f"✅ Final transcript sent to queue (batch): '{full_text}'"))
 
     except Exception as e:
-        message_queue.put((LOG_MESSAGE, f"❌ Error in transcription thread: {e}"))
+        message_queue.put((LOG_MESSAGE, f"❌ Error in batch transcription thread: {e}"))
+        message_queue.put((TRANSCRIPT_MESSAGE, "")) # Ensure empty transcript is sent on error
     finally:
-        if transcriber:
-            try:
-                transcriber.stop_continuous_recognition_async().get()
-                message_queue.put((LOG_MESSAGE, "🎙️ Azure recognition explicitly stopped."))
-            except Exception as e:
-                message_queue.put((LOG_MESSAGE, f"❌ Error stopping Azure recognition explicitly: {e}"))
-
-        try:
-            push_stream.close()
-            message_queue.put((LOG_MESSAGE, "🎙️ Push audio stream closed."))
-        except Exception as e:
-            message_queue.put((LOG_MESSAGE, f"❌ Error closing push stream: {e}"))
-
-        full_text = " ".join(results).strip()
-        message_queue.put((TRANSCRIPT_MESSAGE, full_text))
-        message_queue.put((LOG_MESSAGE, f"✅ Final transcript sent to queue: '{full_text}'"))
-        message_queue.put((PARTIAL_TRANSCRIPT_MESSAGE, ""))
+        # No continuous recognizer or push_stream to close explicitly in batch mode
+        pass
 
 
 # --- UI Layout ---
@@ -200,8 +175,7 @@ while not st.session_state.message_queue.empty():
                 st.toast("📝 Voice transcription added to input box")
             else:
                 st.toast("⚠️ No recognizable speech detected. Try again.", icon="⚠️")
-        elif message_type == PARTIAL_TRANSCRIPT_MESSAGE:
-            st.session_state.current_recognition_text = content
+        # PARTIAL_TRANSCRIPT_MESSAGE handling is removed here
     except queue.Empty:
         pass
     except Exception as e:
@@ -225,20 +199,21 @@ with st.sidebar:
     if webrtc_ctx.state.playing:
         st.success("🎙️ Microphone is live and recording...")
         if not st.session_state.transcribing:
+            # Start transcription thread
             threading.Thread(target=transcribe_webrtc, args=(webrtc_ctx, st.session_state.message_queue,), daemon=True).start()
             st.session_state.transcribing = True
     else:
         st.warning("🎤 Click START and allow microphone access.")
         if st.session_state.transcribing:
             st.session_state.transcribing = False
-            st.session_state.current_recognition_text = ""
+            # current_recognition_text is no longer used, so no need to clear it
 
 
 # --- Main Input (Text Area) ---
 def clear_user_question():
     st.session_state.user_question = ""
     st.session_state.transcript_buffer = ""
-    st.session_state.current_recognition_text = ""
+    # current_recognition_text is no longer used, so no need to clear it
 
 
 col1, col2 = st.columns([6, 2])
@@ -257,7 +232,7 @@ with col1:
         label_visibility="collapsed"
     )
 with col2:
-    st.button("🧹 Clear", on_click=clear_user_question) # Corrected 'on_on_click' to 'on_click'
+    st.button("🧹 Clear", on_click=clear_user_question)
 
 # --- Submit Button (unchanged) ---
 if st.button("💻 Submit Question", disabled=not st.session_state.user_question.strip()):
