@@ -228,30 +228,26 @@ with st.sidebar:
                 speech_config = speechsdk.SpeechConfig(subscription=AZURE_SPEECH_KEY, region=AZURE_SPEECH_REGION)
                 speech_config.speech_synthesis_voice_name = voice
         
-                # Create a stream to capture audio output
-                audio_stream = speechsdk.audio.PullAudioOutputStream()
-                audio_config = AudioOutputConfig(stream=audio_stream)
-                synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config, audio_config=audio_config)
-        
-                # Synthesize
                 text_for_audio = prepare_text_for_tts(st.session_state.expert_output)
                 st.code(text_for_audio, language="text")
+        
+                # Create a temp WAV file to write TTS output
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
+                    temp_wav_path = tmp_file.name
+        
+                audio_config = speechsdk.audio.AudioConfig(filename=temp_wav_path)
+                synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config, audio_config=audio_config)
+        
                 result = synthesizer.speak_text_async(text_for_audio).get()
         
                 if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
-                    # Pull the raw audio data from the stream
-                    audio_buffer = BytesIO()
-                    chunk_size = 4096
-                    while True:
-                        chunk = audio_stream.read(chunk_size)
-                        if not chunk:
-                            break
-                        audio_buffer.write(chunk)
-                    audio_buffer.seek(0)
-        
+                    with open(temp_wav_path, "rb") as f:
+                        audio_bytes = f.read()
+                    audio_buffer = BytesIO(audio_bytes)
                     st.audio(audio_buffer, format="audio/wav")
                     st.download_button("💾 Download Audio (.wav)", data=audio_buffer, file_name="expert_audio.wav", mime="audio/wav")
                 else:
                     st.error(f"TTS failed: {result.reason}")
+        
             except Exception as e:
                 st.error(f"Azure TTS Error: {str(e)}")
