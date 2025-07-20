@@ -4,6 +4,7 @@ import requests
 import os
 from io import BytesIO
 import azure.cognitiveservices.speech as speechsdk
+from azure.cognitiveservices.speech.audio import AudioOutputConfig, PullAudioOutputStream
 from datetime import datetime
 import re
 import tempfile
@@ -221,11 +222,27 @@ with st.sidebar:
             try:
                 speech_config = speechsdk.SpeechConfig(subscription=AZURE_SPEECH_KEY, region=AZURE_SPEECH_REGION)
                 speech_config.speech_synthesis_voice_name = voice
-                synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config, audio_config=None)
+        
+                # Create a stream to capture audio output
+                audio_stream = speechsdk.audio.PullAudioOutputStream()
+                audio_config = AudioOutputConfig(stream=audio_stream)
+                synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config, audio_config=audio_config)
+        
+                # Synthesize
                 text_for_audio = prepare_text_for_tts(st.session_state.expert_output)
                 result = synthesizer.speak_text_async(text_for_audio).get()
+        
                 if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
-                    audio_buffer = BytesIO(result.audio_data)
+                    # Pull the raw audio data from the stream
+                    audio_buffer = BytesIO()
+                    chunk_size = 4096
+                    while True:
+                        chunk = audio_stream.read(chunk_size)
+                        if not chunk:
+                            break
+                        audio_buffer.write(chunk)
+                    audio_buffer.seek(0)
+        
                     st.audio(audio_buffer, format="audio/wav")
                     st.download_button("💾 Download Audio (.wav)", data=audio_buffer, file_name="expert_audio.wav", mime="audio/wav")
                 else:
