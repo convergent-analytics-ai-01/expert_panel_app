@@ -60,36 +60,42 @@ API_KEY = st.secrets["expertpanel_promptflow_apikey"]
 AZURE_SPEECH_KEY = st.secrets["AZURE_SPEECH_KEY"]
 AZURE_SPEECH_REGION = st.secrets["AZURE_SPEECH_REGION"]
 
-# --- Setup Azure Transcriber (for continuous recognition) ---
+# --- Setup Azure Transcriber (for continuous recognition - REVISED WITH NEW TIMEOUTS) ---
 def setup_transcriber(audio_config, message_queue):
     speech_config = speechsdk.SpeechConfig(subscription=AZURE_SPEECH_KEY, region=AZURE_SPEECH_REGION)
     speech_config.speech_recognition_language = "en-US"
 
-    # --- REVISED: Adjust silence timeout properties to 10 seconds ---
+    # Set various timeout properties to allow for longer pauses and speech detection
+    # This is in milliseconds. 15 seconds is quite long, for testing.
     speech_config.set_property(
-        speechsdk.PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "10000" # 10 seconds
+        speechsdk.PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "15000" # 15 seconds of silence before finalizing an utterance
     )
+    # This timeout is for how long the service will wait for *initial* speech detection.
     speech_config.set_property(
-        speechsdk.PropertyId.SpeechServiceConnection_InitialSilenceTimeoutMs, "5000" # Keep 5 seconds
+        speechsdk.PropertyId.SpeechServiceConnection_InitialSilenceTimeoutMs, "15000" # 15 seconds for speech to start
     )
-    # --- END REVISED ---
+    # This is crucial for continuous recognition: max audio duration without speech before it stops.
+    # Set to a very high value for debugging long utterances/pauses.
+    speech_config.set_property(
+        speechsdk.PropertyId.FromContinuousRecognitionResult_NoEndpointSpeechDetectedTimeoutMs, "300000" # 5 minutes (300 seconds) without detecting speech endpoint
+    )
+    # This relates to how long it waits for speech to *begin* after connection for a segment.
+    speech_config.set_property(
+        speechsdk.PropertyId.FromContinuousRecognitionResult_SpeechStartDetectedTimeoutMs, "10000" # 10 seconds for speech start within a segment
+    )
 
     return speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
 
 
 # --- Transcription Worker (for continuous recognition with Azure) ---
 def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext, message_queue: queue.Queue):
-    """
-    This function continuously feeds audio from webrtc_ctx to Azure's PushAudioInputStream
-    for real-time transcription.
-    """
     format = AudioStreamFormat(samples_per_second=16000, bits_per_sample=16, channels=1)
     push_stream = PushAudioInputStream(stream_format=format)
     audio_config = AudioConfig(stream=push_stream)
 
     transcriber = None
-    results = [] # To accumulate final recognized segments
-    current_recognizing_text_list = [""] # For partial results display
+    results = []
+    current_recognizing_text_list = [""]
 
     try:
         transcriber = setup_transcriber(audio_config, message_queue)
@@ -99,8 +105,8 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext, message_queue: queue.Qu
             message_queue.put((LOG_MESSAGE, f"✅ Azure recognized (final): '{evt.result.text}'"))
             if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
                 results.append(evt.result.text)
-                current_recognizing_text_list[0] = "" # Clear partial text after a final recognition
-                message_queue.put((PARTIAL_TRANSCRIPT_MESSAGE, current_recognizing_text_list[0])) # Clear live display
+                current_recognizing_text_list[0] = ""
+                message_queue.put((PARTIAL_TRANSCRIPT_MESSAGE, current_recognizing_text_list[0]))
 
         def recognizing_handler(evt):
             nonlocal current_recognizing_text_list
@@ -134,7 +140,6 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext, message_queue: queue.Qu
         transcriber.start_continuous_recognition_async()
         message_queue.put((LOG_MESSAGE, "🎙️ Started Azure continuous recognition..."))
 
-        # Main loop to feed audio frames
         while webrtc_ctx.state.playing:
             audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=1)
             if not audio_frames:
@@ -159,14 +164,13 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext, message_queue: queue.Qu
                 audio_data = audio_data.flatten()
                 push_stream.write(audio_data.tobytes())
 
-            time.sleep(0.05) # Process audio frames smoothly
+            time.sleep(0.05)
 
     except Exception as e:
         message_queue.put((LOG_MESSAGE, f"❌ Error in transcription thread: {type(e).__name__}: {e}"))
     finally:
         if transcriber:
             try:
-                # Ensure recognition is stopped and stream is closed
                 transcriber.stop_continuous_recognition_async().get()
                 message_queue.put((LOG_MESSAGE, "🎙️ Azure recognition explicitly stopped."))
             except Exception as e:
@@ -179,13 +183,12 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext, message_queue: queue.Qu
             message_queue.put((LOG_MESSAGE, f"❌ Error closing push stream: {e}"))
 
         full_text = " ".join(results).strip()
-        # Send the final accumulated text to the main thread
         message_queue.put((TRANSCRIPT_MESSAGE, full_text))
         message_queue.put((LOG_MESSAGE, f"✅ Final transcript sent to queue: '{full_text}'"))
-        message_queue.put((PARTIAL_TRANSCRIPT_MESSAGE, "")) # Clear live display on thread exit
+        message_queue.put((PARTIAL_TRANSCRIPT_MESSAGE, ""))
 
 
-# --- UI Layout ---
+# --- UI Layout (rest of the code is unchanged) ---
 st.set_page_config(page_title="Expert Agent Panel", layout="wide")
 st.markdown("<h2 style='font-size:1.6rem; font-weight:600; color:#143d7a;'>Product Development Expert Panel Discussion</h2>", unsafe_allow_html=True)
 
