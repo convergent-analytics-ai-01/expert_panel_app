@@ -14,6 +14,9 @@ API_KEY = os.getenv("expertpanel_promptflow_apikey")
 AZURE_SPEECH_KEY = os.getenv("AZURE_SPEECH_KEY")
 AZURE_SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION")
 
+def clear_user_question():
+    st.session_state["user_question"] = ""
+
 # --- Session State ---
 if "expert_output" not in st.session_state:
     st.session_state.expert_output = ""
@@ -82,8 +85,8 @@ with st.container():
             label_visibility="collapsed"
         )
     with col2:
-        if st.button("🧹 Clear"):
-            st.session_state.user_question = ""
+        if st.button("🧹 Clear", on_click=clear_user_question):
+            pass  # The reset happens in the callback
 
 
 
