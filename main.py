@@ -79,12 +79,19 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext):
             if frame.sample_rate != 16000:
                 if DEBUG:
                     print(f"🔄 Resampling from {frame.sample_rate} Hz to 16000 Hz")
+                
+                # Ensure audio is 1D (mono)
+                if audio_data.ndim > 1:
+                    audio_data = np.mean(audio_data, axis=1)
+            
+                audio_data = audio_data.astype(np.float32)  # Convert to float for interpolation
+            
                 original_indices = np.linspace(0, 1, num=len(audio_data))
-                new_indices = np.linspace(0, 1, num=int(len(audio_data) * 16000 / frame.sample_rate))
-                audio_data = np.interp(new_indices, original_indices, audio_data).astype(np.int16)
-
-            if audio_data.ndim > 1:
-                audio_data = np.mean(audio_data, axis=1).astype(np.int16)
+                new_length = int(len(audio_data) * 16000 / frame.sample_rate)
+                new_indices = np.linspace(0, 1, num=new_length)
+            
+                audio_data = np.interp(new_indices, original_indices, audio_data)
+                audio_data = audio_data.astype(np.int16)
 
             push_stream.write(audio_data.tobytes())
 
