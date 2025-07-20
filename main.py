@@ -45,11 +45,13 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext):
 
     def recognized_handler(evt):
         if DEBUG:
-            print("Recognition event received:", evt.result.text)
+            print("✅ Azure recognized:", evt.result.text)
         if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
             results.append(evt.result.text)
 
     def stop_handler(evt):
+        if DEBUG:
+            print("🛑 Session stopped or cancelled.")
         st.session_state.transcribing = False
 
     transcriber.recognized.connect(recognized_handler)
@@ -58,40 +60,35 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext):
 
     transcriber.start_continuous_recognition_async()
     if DEBUG:
-        print("Started Azure recognition...")
+        print("🎙️ Started Azure recognition...")
 
     while webrtc_ctx.state.playing:
         audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=1)
         if not audio_frames:
             if DEBUG:
-                print("No audio frames received...")
+                print("⚠️ No audio frames received...")
             continue
-
-        if DEBUG:
-            print(f"Received {len(audio_frames)} frames")
 
         for frame in audio_frames:
             audio_data = frame.to_ndarray()
-            if DEBUG:
-                print(f"Frame sample rate: {frame.sample_rate}, dtype: {audio_data.dtype}, shape: {audio_data.shape}")
 
-            # Inside the loop, replace the "skip" logic:
             if frame.sample_rate != 16000:
                 if DEBUG:
                     print(f"🔄 Resampling from {frame.sample_rate} Hz to 16000 Hz")
-                
-                # Ensure audio is 1D (mono)
+
+                # Flatten multi-channel audio to mono if needed
                 if audio_data.ndim > 1:
-                    audio_data = np.mean(audio_data, axis=1)
-            
-                audio_data = audio_data.astype(np.float32)  # Convert to float for interpolation
-            
+                    audio_data = np.mean(audio_data, axis=0)
+
+                audio_data = audio_data.astype(np.float32)
                 original_indices = np.linspace(0, 1, num=len(audio_data))
                 new_length = int(len(audio_data) * 16000 / frame.sample_rate)
                 new_indices = np.linspace(0, 1, num=new_length)
-            
                 audio_data = np.interp(new_indices, original_indices, audio_data)
-                audio_data = audio_data.astype(np.int16)
+                audio_data = np.clip(audio_data, -32768, 32767).astype(np.int16)
+
+            # Flatten final array just in case (fixes shape (1, n))
+            audio_data = audio_data.flatten()
 
             push_stream.write(audio_data.tobytes())
 
@@ -104,7 +101,7 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext):
     st.session_state.transcript_buffer = full_text
 
     if DEBUG:
-        print("Transcription finished. Final transcript:", full_text)
+        print("✅ Final transcript:", full_text)
 
     if full_text:
         st.toast("📝 Voice transcription added to input box")
