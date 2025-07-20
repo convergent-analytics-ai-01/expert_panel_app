@@ -106,7 +106,7 @@ with st.container():
         if st.button("🧹 Clear", on_click=clear_user_question):
             pass  # The reset happens in the callback
         st.markdown(
-            "<h2 style='font-size:1.0rem; font-weight:600;'>Expand the text box with the <br>lower right hash marks.</h2>",
+            "<h2 style='font-size:1.0rem; font-weight:400;'>Expand the text box with the <br>lower right hash marks.</h2>",
             unsafe_allow_html=True
         )
 
