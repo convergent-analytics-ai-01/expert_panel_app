@@ -7,18 +7,20 @@ from io import BytesIO
 import azure.cognitiveservices.speech as speechsdk
 from datetime import datetime
 import re
-import tempfile
 
 # --- Configuration ---
 ENDPOINT_URL = "https://expertpanel-endpoint.eastus.inference.ml.azure.com/score"
-#API_KEY = os.getenv("expertpanel_promptflow_apikey")
-#AZURE_SPEECH_KEY = os.getenv("AZURE_SPEECH_KEY")
-#AZURE_SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION")
-API_KEY = st.secrets["expertpanel_promptflow_apikey"]
-AZURE_SPEECH_KEY =st.secrets["AZURE_SPEECH_KEY"]
-AZURE_SPEECH_REGION = st.secrets["AZURE_SPEECH_REGION"]
+API_KEY = os.getenv("expertpanel_promptflow_apikey")
+AZURE_SPEECH_KEY = os.getenv("AZURE_SPEECH_KEY")
+AZURE_SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION")
 
-#st.markdown("✅ **Using st.secrets successfully!**")
+# --- Session State ---
+if "expert_output" not in st.session_state:
+    st.session_state.expert_output = ""
+if "user_question" not in st.session_state:
+    st.session_state.user_question = ""
+if "history" not in st.session_state:
+    st.session_state.history = []
 
 # --- Page Setup ---
 st.set_page_config(page_title="Expert Agent Panel", layout="centered")
@@ -39,65 +41,29 @@ st.markdown(
 )
 #st.markdown("Ask a question and hear from trusted product development voices.")
 
-# --- Session State Initialization ---
-if "user_question" not in st.session_state:
-    st.session_state.user_question = ""
-if "expert_output" not in st.session_state:
-    st.session_state.expert_output = ""
-if "history" not in st.session_state:
-    st.session_state.history = []
-if "audio_input_counter" not in st.session_state:
-    st.session_state.audio_input_counter = 0
-
-# --- Streamlit Sidebar Mic Section ---
+# --- Sidebar: Microphone Input ---
 with st.sidebar:
     st.header("🎤 Voice Input")
     st.caption("Or speak your question instead of typing it.")
 
-    uploaded_audio = st.audio_input(
-        label="🎙️ Record Your Question",
-        key=f"audio_input_{st.session_state.audio_input_counter}"
-    )
+    def transcribe_audio_from_stream():
+        speech_config = speechsdk.SpeechConfig(subscription=AZURE_SPEECH_KEY, region=AZURE_SPEECH_REGION)
+        audio_config = speechsdk.audio.AudioConfig(use_default_microphone=True)
+        speech_recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
+        st.info("🎙️ Listening... Please speak your question clearly.")
+        result = speech_recognizer.recognize_once()
+        if result.reason == speechsdk.ResultReason.RecognizedSpeech:
+            st.success("✅ Transcription Complete")
+            return result.text
+        else:
+            st.error(f"Speech Recognition Error: {result.reason}")
+            return ""
 
-    if uploaded_audio is not None:
-        try:
-            st.info("🧠 Transcribing audio...")
-
-            # Save uploaded audio to a temporary WAV file
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
-                tmp_file.write(uploaded_audio.read())
-                tmp_filename = tmp_file.name
-
-            # Configure Azure Speech SDK
-            speech_config = speechsdk.SpeechConfig(
-                subscription=AZURE_SPEECH_KEY,
-                region=AZURE_SPEECH_REGION
-            )
-            audio_config = speechsdk.audio.AudioConfig(filename=tmp_filename)
-            recognizer = speechsdk.SpeechRecognizer(
-                speech_config=speech_config,
-                audio_config=audio_config
-            )
-
-            # Run speech recognition
-            result = recognizer.recognize_once()
-
-            if result.reason == speechsdk.ResultReason.RecognizedSpeech:
-                st.success("✅ Transcription Complete")
-                current = st.session_state.user_question.strip()
-                st.session_state.user_question = f"{current} {result.text}".strip()
-
-                # Reset audio widget to allow new input
-                st.session_state.audio_input_counter += 1
-                st.rerun()
-
-            else:
-                st.error(f"❌ Speech Recognition Failed: {result.reason}")
-
-        except Exception as e:
-            st.error(f"❌ Error: {str(e)}")
-
-
+    if st.button("🎙️ Record Your Question"):
+        transcription = transcribe_audio_from_stream()
+        if transcription:
+            current = st.session_state.user_question.strip()
+            st.session_state.user_question = f"{current} {transcription}".strip()
 
 # --- Main Area: Question Input ---
 col1, col2 = st.columns([5, 1])
