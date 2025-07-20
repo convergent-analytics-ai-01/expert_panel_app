@@ -23,7 +23,7 @@ if "history" not in st.session_state:
     st.session_state.history = []
 
 # --- Page Setup ---
-st.set_page_config(page_title="Expert Agent Panel", layout="centered")
+st.set_page_config(page_title="Expert Agent Panel", layout="wide")
 st.markdown("""
     <style>
     .main > div:first-child { padding-top: 0rem; }
@@ -66,23 +66,26 @@ with st.sidebar:
             st.session_state.user_question = f"{current} {transcription}".strip()
 
 # --- Main Area: Question Input ---
-col1, col2 = st.columns([5, 1])
-with col1:
-    st.markdown(
-        "<h2 style='font-size:1.0rem; font-weight:600;'>🎙️ Enter your question and hear from trusted product development voices:</h2>",
-        unsafe_allow_html=True
-    )
-with col2:
-    if st.button("🧹 Clear"):
-        st.session_state.user_question = ""
+with st.container():
+    col1, col2 = st.columns([6, 2])
+    with col1:
+        st.markdown(
+            "<h2 style='font-size:1.0rem; font-weight:600;'>🎙️ Enter your question and hear from trusted product development voices:</h2>",
+            unsafe_allow_html=True
+        )
+        st.text_area(
+            label="",
+            key="user_question",
+            height=130,
+            placeholder="Type or speak your question here...",
+            help="You can also use voice input from the sidebar",
+            label_visibility="collapsed"
+        )
+    with col2:
+        if st.button("🧹 Clear"):
+            st.session_state.user_question = ""
 
-st.text_area(
-    label="",
-    key="user_question",
-    height=120,
-    placeholder="Type or speak your question here...",
-    help="You can also use voice input from the sidebar",
-)
+
 
 # --- Submit Button ---
 submit_disabled = not st.session_state.user_question.strip()
