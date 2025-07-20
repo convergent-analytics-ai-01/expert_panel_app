@@ -19,21 +19,42 @@ if "debug_logs" not in st.session_state:
     st.session_state.debug_logs = []
 
 def log_debug(message):
+    # Only log if debug is enabled
     if st.session_state.get("DEBUG", False):
-        print(message)
+        # Print to console (visible in Streamlit Cloud app logs)
+        print(f"DEBUG: {message}")
+        # Append to session state for sidebar display
         st.session_state.debug_logs.append(message)
+        # Keep only the last 200 logs to prevent memory issues
         st.session_state.debug_logs = st.session_state.debug_logs[-200:]
 
+# Ensure DEBUG state is initialized from checkbox value (important for first run)
+if "DEBUG" not in st.session_state:
+    st.session_state.DEBUG = False
+
 # Optional: Enable debug output
-st.session_state.DEBUG = st.sidebar.checkbox("Show Debug Logs", value=False)
+# The value of the checkbox will persist in st.session_state.DEBUG across reruns
+st.session_state.DEBUG = st.sidebar.checkbox("Show Debug Logs", value=st.session_state.DEBUG)
 
 if st.session_state.DEBUG:
     st.sidebar.markdown("#### Debug Logs")
+    # Clear logs button
     st.sidebar.button("🧹 Clear Logs", on_click=lambda: st.session_state.update(debug_logs=[]))
-    st.sidebar.text_area("Logs", value="\n".join(st.session_state.debug_logs), height=200)
+    # Text area for logs. Note: Logs update after a Streamlit rerun.
+    st.sidebar.text_area(
+        "Logs",
+        value="\n".join(st.session_state.debug_logs),
+        height=200,
+        placeholder="Logs will appear here after events trigger a Streamlit rerun (e.g., stopping the microphone)."
+    )
+    # This print will appear in Streamlit Cloud's console logs,
+    # helping confirm if the debug logs list itself is being populated.
+    print(f"Current debug logs count: {len(st.session_state.debug_logs)}")
+
 
 # --- Configuration ---
 ENDPOINT_URL = "https://expertpanel-endpoint.eastus.inference.ml.azure.com/score"
+# Ensure these keys are correctly set in your Streamlit secrets
 API_KEY = st.secrets["expertpanel_promptflow_apikey"]
 AZURE_SPEECH_KEY = st.secrets["AZURE_SPEECH_KEY"]
 AZURE_SPEECH_REGION = st.secrets["AZURE_SPEECH_REGION"]
@@ -65,49 +86,66 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext):
 
     def stop_handler(evt):
         log_debug("🛑 Session stopped or cancelled.")
-        st.session_state.transcribing = False
+        st.session_state.transcribing = False # Update state on main thread (safe)
+
+        # Added detailed logging for cancellation events
+        if evt.result.reason == speechsdk.ResultReason.Canceled:
+            cancellation_details = evt.result.cancellation_details
+            log_debug(f"🛑 Cancellation Reason: {cancellation_details.reason}")
+            if cancellation_details.reason == speechsdk.CancellationReason.Error:
+                log_debug(f"🛑 Cancellation Error Details: {cancellation_details.error_details} (Error Code: {cancellation_details.error_code})")
+            elif cancellation_details.reason == speechsdk.CancellationReason.EndOfStream:
+                log_debug("🛑 End of audio stream detected by Azure Speech Service.")
+        else:
+            log_debug(f"🛑 Stop Reason: {evt.result.reason}")
+
 
     transcriber.recognized.connect(recognized_handler)
     transcriber.session_stopped.connect(stop_handler)
     transcriber.canceled.connect(stop_handler)
 
-    transcriber.start_continuous_recognition_async()
-    log_debug("🎙️ Started Azure recognition...")
+    try:
+        transcriber.start_continuous_recognition_async()
+        log_debug("🎙️ Started Azure recognition...")
 
-    while webrtc_ctx.state.playing:
-        audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=1)
-        if not audio_frames:
-            log_debug("⚠️ No audio frames received...")
-            continue
+        while webrtc_ctx.state.playing:
+            audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=1)
+            if not audio_frames:
+                log_debug("⚠️ No audio frames received...")
+                time.sleep(0.1) # Prevent busy-waiting
+                continue
 
-        for frame in audio_frames:
-            audio_data = frame.to_ndarray()
+            for frame in audio_frames:
+                audio_data = frame.to_ndarray()
 
-            if frame.sample_rate != 16000:
-                log_debug(f"🔄 Resampling from {frame.sample_rate} Hz to 16000 Hz")
+                if frame.sample_rate != 16000:
+                    log_debug(f"🔄 Resampling from {frame.sample_rate} Hz to 16000 Hz")
+                    if audio_data.ndim > 1:
+                        audio_data = np.mean(audio_data, axis=0)
+                    audio_data = audio_data.astype(np.float32)
+                    original_indices = np.linspace(0, 1, num=len(audio_data))
+                    new_length = int(len(audio_data) * 16000 / frame.sample_rate)
+                    new_indices = np.linspace(0, 1, num=new_length)
+                    audio_data = np.interp(new_indices, original_indices, audio_data)
+                    audio_data = np.clip(audio_data, -32768, 32767).astype(np.int16)
 
-                if audio_data.ndim > 1:
-                    audio_data = np.mean(audio_data, axis=0)
+                audio_data = audio_data.flatten()
+                push_stream.write(audio_data.tobytes())
 
-                audio_data = audio_data.astype(np.float32)
-                original_indices = np.linspace(0, 1, num=len(audio_data))
-                new_length = int(len(audio_data) * 16000 / frame.sample_rate)
-                new_indices = np.linspace(0, 1, num=new_length)
-                audio_data = np.interp(new_indices, original_indices, audio_data)
-                audio_data = np.clip(audio_data, -32768, 32767).astype(np.int16)
+            time.sleep(0.05) # Shorter sleep for more responsive audio processing
+    except Exception as e:
+        log_debug(f"❌ Error in transcription thread: {e}")
+    finally:
+        transcriber.stop_continuous_recognition_async().get() # Ensure stop is awaited
+        push_stream.close()
+        log_debug("🎙️ Azure recognition stopped and push stream closed.")
 
-            audio_data = audio_data.flatten()
-            push_stream.write(audio_data.tobytes())
-
-        time.sleep(0.1)
-
-    transcriber.stop_continuous_recognition()
-    push_stream.close()
 
     full_text = " ".join(results).strip()
     st.session_state.transcript_buffer = full_text
-    log_debug(f"✅ Final transcript: {full_text}")
+    log_debug(f"✅ Final transcript: '{full_text}'")
 
+    # Display toast messages (these will appear on the next rerun)
     if full_text:
         st.toast("📝 Voice transcription added to input box")
     else:
@@ -130,13 +168,18 @@ with st.sidebar:
         media_stream_constraints={"audio": True, "video": False},
     )
 
-    if webrtc_ctx and webrtc_ctx.state.playing:
+    if webrtc_ctx.state.playing:
         st.success("🎙️ Microphone is live and recording...")
         if not st.session_state.transcribing:
+            # Start transcription thread only if not already running
             threading.Thread(target=transcribe_webrtc, args=(webrtc_ctx,), daemon=True).start()
             st.session_state.transcribing = True
-    elif webrtc_ctx:
+    else: # webrtc_ctx is None or webrtc_ctx.state.playing is False
         st.warning("🎤 Click START and allow microphone access.")
+        # Reset transcribing state when microphone is not playing
+        if st.session_state.transcribing:
+            st.session_state.transcribing = False
+
 
 # --- Main Input ---
 def clear_user_question():
@@ -144,9 +187,12 @@ def clear_user_question():
 
 col1, col2 = st.columns([6, 2])
 with col1:
+    # This block executes on every rerun.
+    # If transcript_buffer was populated by the thread, it will now be applied.
     if st.session_state.transcript_buffer:
+        log_debug(f"Main UI: Applying transcript from buffer to user_question: '{st.session_state.transcript_buffer}'")
         st.session_state.user_question += " " + st.session_state.transcript_buffer
-        st.session_state.transcript_buffer = ""
+        st.session_state.transcript_buffer = "" # Clear buffer after use
 
     st.text_area(
         label="User Question",
