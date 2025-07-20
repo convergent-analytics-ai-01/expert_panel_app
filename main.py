@@ -1,13 +1,13 @@
 # --- Imports ---
 import streamlit as st
 import azure.cognitiveservices.speech as speechsdk
-from azure.cognitiveservices.speech.audio import AudioConfig # Note: PushAudioInputStream is no longer needed
+from azure.cognitiveservices.speech.audio import AudioStreamFormat, PushAudioInputStream, AudioConfig # Re-import PushAudioInputStream
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, WebRtcStreamerContext
 import threading
 import numpy as np
 import time
 import requests
-from io import BytesIO # Needed to create an in-memory audio stream for Azure
+from io import BytesIO # Still useful, but for creating a specific audio stream, not directly passed
 from datetime import datetime
 import sys
 import queue
@@ -15,13 +15,11 @@ import queue
 # --- Constants for Queue Messages ---
 LOG_MESSAGE = "log"
 TRANSCRIPT_MESSAGE = "transcript"
-AUDIO_BUFFER_MESSAGE = "audio_buffer" # New message type for collected audio (NumPy array)
-# PARTIAL_TRANSCRIPT_MESSAGE is removed as it's not relevant for batch processing
+AUDIO_BUFFER_MESSAGE = "audio_buffer" # Message type for collected raw audio bytes
 
 st.sidebar.text(f"Running Python {sys.version}")
 
 # --- Initialize Session State (including the queue) ---
-# current_recognition_text is removed from initialization as it's not used in batch mode
 for key in ["user_question", "expert_output", "history", "transcribing", "transcript_buffer", "debug_logs"]:
     if key not in st.session_state:
         st.session_state[key] = "" if "buffer" in key or "question" in key or "output" in key else \
@@ -45,7 +43,6 @@ st.session_state.DEBUG = st.sidebar.checkbox("Show Debug Logs", value=st.session
 
 if st.session_state.DEBUG:
     st.sidebar.markdown("#### Debug Logs")
-    # current_recognition_text cleared is also removed here
     st.sidebar.button("🧹 Clear Logs", on_click=lambda: st.session_state.update(debug_logs=[]))
     st.sidebar.text_area(
         "Logs",
@@ -53,7 +50,9 @@ if st.session_state.DEBUG:
         height=200,
         placeholder="Logs will appear here after events trigger a Streamlit rerun (e.g., stopping the microphone or user interaction)."
     )
-    # "Live Recognition" section is removed from the UI
+    # "Live Recognition" is removed for batch mode
+    st.sidebar.markdown("#### Live Recognition")
+    st.sidebar.code("", language="text", help="Live recognition is not active in batch mode.")
 
 
 # --- Configuration ---
@@ -63,13 +62,11 @@ AZURE_SPEECH_KEY = st.secrets["AZURE_SPEECH_KEY"]
 AZURE_SPEECH_REGION = st.secrets["AZURE_SPEECH_REGION"]
 
 # --- Setup SpeechConfig only (for Batch Recognition) ---
-# This function prepares the basic SpeechConfig.
-# It does NOT take audio_config as argument, as that will be created from collected audio
+# This prepares the basic SpeechConfig that will be used by the main thread.
 def setup_speech_config():
     speech_config = speechsdk.SpeechConfig(subscription=AZURE_SPEECH_KEY, region=AZURE_SPEECH_REGION)
     speech_config.speech_recognition_language = "en-US"
-    # Silence timeouts are less critical for batch but can be kept for consistency
-    # They won't affect segmentation in the same way as continuous recognition
+    # Silence timeouts are less critical for batch but can be kept.
     speech_config.set_property(
         speechsdk.PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "15000"
     )
@@ -79,15 +76,15 @@ def setup_speech_config():
     return speech_config
 
 
-# --- Transcription Worker (REVISED for Batch Audio Collection) ---
+# --- Transcription Worker (REVISED: only collects audio bytes) ---
 def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext, message_queue: queue.Queue):
     """
-    This function now *only* collects audio into a buffer (NumPy arrays)
-    and sends the complete buffer back to the main Streamlit thread via the queue.
+    This function *only* collects audio bytes from webrtc_ctx
+    and sends the complete byte buffer to the main Streamlit thread via the queue.
     The actual transcription call to Azure happens in the main thread.
     """
     message_queue.put((LOG_MESSAGE, "🎙️ Starting audio recording for batch transcription..."))
-    collected_audio_ndarray_list = [] # List to collect NumPy arrays of audio frames
+    collected_audio_bytes_list = [] # List to collect raw bytes of audio frames
 
     try:
         # Collect audio frames while microphone is playing
@@ -101,8 +98,7 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext, message_queue: queue.Qu
             for frame in audio_frames:
                 audio_data = frame.to_ndarray()
 
-                # Resampling and type conversion to 16kHz int16 (Azure's preferred format for direct stream)
-                # Ensure it's 16kHz and mono, and convert to int16 before appending bytes
+                # Resampling and type conversion to 16kHz, mono, int16 PCM
                 if frame.sample_rate != 16000:
                     message_queue.put((LOG_MESSAGE, f"🔄 Resampling from {frame.sample_rate} Hz to 16000 Hz for collection"))
                     if audio_data.ndim > 1:
@@ -118,19 +114,19 @@ def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext, message_queue: queue.Qu
                         audio_data = np.mean(audio_data, axis=0)
                     audio_data = audio_data.astype(np.int16) # Ensure it's int16
 
-                collected_audio_ndarray_list.append(audio_data.tobytes()) # Collect raw bytes
+                collected_audio_bytes_list.append(audio_data.tobytes()) # Collect raw bytes
             time.sleep(0.05) # Small sleep during collection loop
 
         # Execution reaches here when webrtc_ctx.state.playing becomes False (user clicked STOP)
         message_queue.put((LOG_MESSAGE, "🛑 Recording loop finished. Sending audio buffer to main thread."))
-        message_queue.put((LOG_MESSAGE, f"Total collected audio bytes chunks: {len(collected_audio_ndarray_list)}"))
+        message_queue.put((LOG_MESSAGE, f"Total collected audio bytes chunks: {len(collected_audio_bytes_list)}"))
 
-        if not collected_audio_ndarray_list:
+        if not collected_audio_bytes_list:
             message_queue.put((LOG_MESSAGE, "⚠️ No audio was actually recorded. Sending empty buffer."))
             message_queue.put((AUDIO_BUFFER_MESSAGE, b"")) # Send empty byte string to signal no audio
             return
 
-        full_audio_bytes = b"".join(collected_audio_ndarray_list)
+        full_audio_bytes = b"".join(collected_audio_bytes_list)
         message_queue.put((LOG_MESSAGE, f"Prepared {len(full_audio_bytes)} bytes of audio. Placing in queue."))
         # Send the raw bytes of the collected audio to the main thread
         message_queue.put((AUDIO_BUFFER_MESSAGE, full_audio_bytes))
@@ -171,16 +167,27 @@ while not st.session_state.message_queue.empty():
                 continue
 
             try:
-                # Create BytesIO object from raw collected audio bytes
-                audio_stream_buffer = BytesIO(content)
+                # 1. Define audio format for PushAudioInputStream
+                audio_stream_format = speechsdk.audio.AudioStreamFormat(
+                    samples_per_second=16000,
+                    bits_per_sample=16,
+                    channels=1
+                )
+                # 2. Create PushAudioInputStream
+                push_stream = speechsdk.audio.PushAudioInputStream(stream_format=audio_stream_format)
+                # 3. Create AudioConfig from PushAudioInputStream
+                audio_config = AudioConfig(stream=push_stream)
+
                 speech_config = setup_speech_config() # Get the config
-                # Create AudioConfig from the in-memory stream
-                audio_config = AudioConfig(stream=audio_stream_buffer)
-
                 recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
-                log_debug("Main UI: Sending collected audio to Azure for batch recognition...")
+                log_debug("Main UI: Sending collected audio to Azure for batch recognition via PushAudioInputStream...")
 
-                # Perform single-shot recognition - this is a blocking call
+                # 4. Write all collected audio bytes to the push stream
+                push_stream.write(content)
+                # 5. Signal that no more data will be written to the stream
+                push_stream.close()
+
+                # 6. Perform single-shot recognition - this is a blocking call
                 result = recognizer.recognize_once_async().get()
 
                 full_text = ""
@@ -226,7 +233,7 @@ with st.sidebar:
     rtc_config = {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
 
     webrtc_ctx = webrtc_streamer(
-        key="azure-batch-stream", # Changed key for new component behavior
+        key="azure-batch-stream", # Consistent key
         mode=WebRtcMode.SENDONLY,
         audio_receiver_size=1024,
         rtc_configuration=rtc_config,
