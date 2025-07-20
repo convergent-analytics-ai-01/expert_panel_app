@@ -50,10 +50,8 @@ if st.session_state.DEBUG:
         height=200,
         placeholder="Logs will appear here after events trigger a Streamlit rerun (e.g., stopping the microphone or user interaction)."
     )
-    # "Live Recognition" is removed for batch mode
     st.sidebar.markdown("#### Live Recognition")
-    # --- FIX HERE: Removed 'help' argument ---
-    st.sidebar.code("", language="text") # Removed help="Live recognition is not active in batch mode."
+    st.sidebar.code("", language="text")
 
 
 # --- Configuration ---
@@ -77,11 +75,6 @@ def setup_speech_config():
 
 # --- Transcription Worker (REVISED: only collects audio bytes) ---
 def transcribe_webrtc(webrtc_ctx: WebRtcStreamerContext, message_queue: queue.Queue):
-    """
-    This function *only* collects audio bytes from webrtc_ctx
-    and sends the complete byte buffer to the main Streamlit thread via the queue.
-    The actual transcription call to Azure happens in the main thread.
-    """
     message_queue.put((LOG_MESSAGE, "🎙️ Starting audio recording for batch transcription..."))
     collected_audio_bytes_list = []
 
@@ -184,8 +177,9 @@ while not st.session_state.message_queue.empty():
                 elif result.reason == speechsdk.ResultReason.NoMatch:
                     full_text = ""
                     log_debug("⚠️ No speech could be recognized (NoMatch, main thread).")
+                    # --- FIX HERE: Access .reason from no_match_details directly ---
                     if result.no_match_details:
-                        log_debug(f"NoMatch details: {result.no_match_details.reason} - {result.no_match_details.error_details}")
+                        log_debug(f"NoMatch details reason: {result.no_match_details.reason}")
                 elif result.reason == speechsdk.ResultReason.Canceled:
                     full_text = ""
                     cancellation_details = result.cancellation_details
