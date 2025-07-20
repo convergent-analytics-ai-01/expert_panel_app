@@ -1,7 +1,7 @@
 # --- Imports ---
 import streamlit as st
 import azure.cognitiveservices.speech as speechsdk
-from azure.cognitiveservices.speech.audio import AudioStreamFormat, PushAudioInputStream, AudioConfig # Re-import PushAudioInputStream
+from azure.cognitiveservices.speech.audio import AudioStreamFormat, PushAudioInputStream, AudioConfig
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, WebRtcStreamerContext
 import threading
 import numpy as np
@@ -15,7 +15,7 @@ import queue
 # --- Constants for Queue Messages ---
 LOG_MESSAGE = "log"
 TRANSCRIPT_MESSAGE = "transcript"
-PARTIAL_TRANSCRIPT_MESSAGE = "partial_transcript" # For live interim results
+PARTIAL_TRANSCRIPT_MESSAGE = "partial_transcript"
 
 st.sidebar.text(f"Running Python {sys.version}")
 
@@ -65,15 +65,14 @@ def setup_transcriber(audio_config, message_queue):
     speech_config = speechsdk.SpeechConfig(subscription=AZURE_SPEECH_KEY, region=AZURE_SPEECH_REGION)
     speech_config.speech_recognition_language = "en-US"
 
-    # Adjust silence timeout properties for continuous recognition
-    # Set to a higher value (e.g., 5 seconds) to allow for longer pauses
+    # --- REVISED: Adjust silence timeout properties to 10 seconds ---
     speech_config.set_property(
-        speechsdk.PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "5000" # 5 seconds
+        speechsdk.PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "10000" # 10 seconds
     )
-    # Initial silence timeout might not be as critical but can be adjusted
     speech_config.set_property(
-        speechsdk.PropertyId.SpeechServiceConnection_InitialSilenceTimeoutMs, "5000"
+        speechsdk.PropertyId.SpeechServiceConnection_InitialSilenceTimeoutMs, "5000" # Keep 5 seconds
     )
+    # --- END REVISED ---
 
     return speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
 
@@ -218,28 +217,26 @@ with st.sidebar:
     rtc_config = {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
 
     webrtc_ctx = webrtc_streamer(
-        key="azure-stream", # Keep a consistent key
+        key="azure-stream",
         mode=WebRtcMode.SENDONLY,
         audio_receiver_size=1024,
         rtc_configuration=rtc_config,
         media_stream_constraints={"audio": True, "video": False},
     )
 
-    if webrtc_ctx is None: # Initial state, component not yet rendered/initialized
+    if webrtc_ctx is None:
         st.warning("⚠️ WebRTC component is initializing. Please wait and click 'START' if it appears.")
     elif webrtc_ctx.state.playing:
         st.success("🎙️ Microphone is live and recording...")
         if not st.session_state.transcribing:
-            # Start transcription thread (now using continuous Azure)
             threading.Thread(target=transcribe_webrtc, args=(webrtc_ctx, st.session_state.message_queue,), daemon=True).start()
             st.session_state.transcribing = True
     elif webrtc_ctx.state and not webrtc_ctx.state.playing:
         st.warning("🎤 Microphone stopped. Click 'START' to re-activate.")
-        # Reset transcribing state when microphone is not playing
         if st.session_state.transcribing:
             st.session_state.transcribing = False
-            st.session_state.current_recognition_text = "" # Clear live display on stop
-    else: # Fallback for any other unexpected state
+            st.session_state.current_recognition_text = ""
+    else:
         st.warning("⚠️ WebRTC component is in an unknown state. Try refreshing the page.")
 
 
@@ -247,7 +244,7 @@ with st.sidebar:
 def clear_user_question():
     st.session_state.user_question = ""
     st.session_state.transcript_buffer = ""
-    st.session_state.current_recognition_text = "" # Clear live display on clear button
+    st.session_state.current_recognition_text = ""
 
 col1, col2 = st.columns([6, 2])
 with col1:
